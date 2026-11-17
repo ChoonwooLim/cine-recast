@@ -128,11 +128,28 @@ def project3(tmp_path, clip3):
     return init_project(tmp_path / "p", clip3, "t")
 
 
-@pytest.fixture
-def analyzed3(project3):
+@pytest.fixture(scope="session")
+def _analyzed3_template(tmp_path_factory, clip3) -> Path:
+    """Analyse clip3 once per session; tests get copies of this folder."""
     from cine_recast.analyze import analyze
-    analyze(project3.root)
-    return project3
+    from cine_recast.project import init_project
+
+    root = tmp_path_factory.mktemp("analyzed3") / "p"
+    init_project(root, clip3, "t")
+    analyze(root)
+    return root
+
+
+@pytest.fixture
+def analyzed3(_analyzed3_template, tmp_path):
+    """An isolated copy of the analysed three-shot project."""
+    import shutil
+
+    from cine_recast.paths import ProjectPaths
+
+    root = tmp_path / "p"
+    shutil.copytree(_analyzed3_template, root)
+    return ProjectPaths(root)
 
 
 def good_casting(root: Path, tmp_path: Path) -> None:
