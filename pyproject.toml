@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cine-recast"
+version = "0.1.0"
+description = "Recreate a reference video shot for shot with swapped people and backgrounds."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0,<3",
+    "opencv-python-headless>=4.10,<5",
+    "Pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+cine-recast = "cine_recast.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
