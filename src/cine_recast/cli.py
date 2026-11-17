@@ -4,6 +4,8 @@ from pathlib import Path
 
 from . import __version__
 from .analyze import analyze, review_strips
+from .casting import check as check_casting
+from .casting import write_template
 from .errors import CineRecastError
 from .project import RIGHT_ANSWERS, RIGHTS_ITEMS, init_project, set_right
 
@@ -40,6 +42,21 @@ def _cmd_cuts_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_cast_template(args: argparse.Namespace) -> int:
+    print(write_template(Path(args.project)))
+    return 0
+
+
+def _cmd_cast_check(args: argparse.Namespace) -> int:
+    problems = check_casting(Path(args.project))
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        return 2
+    print("casting ok")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cine-recast")
     parser.add_argument("--version", action="version", version=f"cine-recast {__version__}")
@@ -70,6 +87,15 @@ def _build_parser() -> argparse.ArgumentParser:
     review = cuts_sub.add_parser("review", help="write review images for the cuts and shots")
     review.add_argument("project", help="project folder")
     review.set_defaults(func=_cmd_cuts_review)
+
+    cast = sub.add_parser("cast", help="elements and swap table")
+    cast_sub = cast.add_subparsers(dest="cast_command")
+    cast_template = cast_sub.add_parser("template", help="write casting.template.json")
+    cast_template.add_argument("project", help="project folder")
+    cast_template.set_defaults(func=_cmd_cast_template)
+    cast_check = cast_sub.add_parser("check", help="validate casting.json")
+    cast_check.add_argument("project", help="project folder")
+    cast_check.set_defaults(func=_cmd_cast_check)
     return parser
 
 

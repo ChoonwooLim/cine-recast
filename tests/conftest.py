@@ -126,3 +126,39 @@ def clip3(tmp_path_factory) -> Path:
 def project3(tmp_path, clip3):
     from cine_recast.project import init_project
     return init_project(tmp_path / "p", clip3, "t")
+
+
+@pytest.fixture
+def analyzed3(project3):
+    from cine_recast.analyze import analyze
+    analyze(project3.root)
+    return project3
+
+
+def good_casting(root: Path, tmp_path: Path) -> None:
+    """Write a valid casting.json with generated 1x1 PNG images and answer all three rights items."""
+    from PIL import Image
+
+    from cine_recast.jsonio import write_json
+    from cine_recast.paths import ProjectPaths
+    from cine_recast.project import RIGHTS_ITEMS, set_right
+
+    refs = Path(tmp_path) / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    person, background = refs / "person_front.png", refs / "background.png"
+    for image in (person, background):
+        Image.new("RGB", (1, 1), (128, 128, 128)).save(image)
+    write_json(ProjectPaths(Path(root)).casting_file, {
+        "elements": [
+            {"id": "hero", "kind": "person", "name": "Rider", "shots": [1, 3],
+             "look": "teenage boy, tousled brown hair, green wool tunic, dark leather vest"},
+            {"id": "sky_battle", "kind": "background", "name": "Sky around the giant", "shots": [1, 3],
+             "look": "grey-green smoke, falling rock debris, overcast light"},
+        ],
+        "swaps": [
+            {"element": "hero", "images": [person.as_posix()], "note": ""},
+            {"element": "sky_battle", "images": [background.as_posix()], "note": ""},
+        ],
+    })
+    for item in RIGHTS_ITEMS:
+        set_right(root, item, "yes")
