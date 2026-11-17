@@ -120,3 +120,9 @@ def make_sweep_clip(path: Path, *, frames: int = 40, sweep_start: int = 18,
 def clip3(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("clips") / "clip3.mp4"
     return make_clip(path, [("testsrc2", 30), ("smptebars", 24), ("mandelbrot", 36)])
+
+
+@pytest.fixture
+def project3(tmp_path, clip3):
+    from cine_recast.project import init_project
+    return init_project(tmp_path / "p", clip3, "t")
