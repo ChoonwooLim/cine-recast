@@ -9,6 +9,7 @@ from cine_recast.cuts import Shot, detect_cuts, shots_from_cuts
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import VideoInfo, cut_frames, extract_still, iter_frames, probe
 from cine_recast.jsonio import read_json, write_json
+from cine_recast.measure import measure_clip
 from cine_recast.paths import ProjectPaths
 from cine_recast.picture import PictureBox, detect_picture_box
 from cine_recast.project import load_project
@@ -45,7 +46,10 @@ def load_shots(root: Path) -> list[Shot]:
 
 
 def analyze(root: Path, *, cuts: list[int] | None = None) -> dict:
-    """Write analysis/video.json, cuts.json and one folder per shot. Re-running replaces the shots."""
+    """Write analysis/video.json, cuts.json and one folder per shot (clip, stills, measured sheet).
+
+    Re-running replaces the shots.
+    """
     root = Path(root)
     pp = ProjectPaths(root)
     load_project(root)
@@ -77,11 +81,12 @@ def analyze(root: Path, *, cuts: list[int] | None = None) -> dict:
         stills = {"first": shot.start, "mid": (shot.start + shot.end) // 2, "last": shot.end - 1}
         for label, frame in stills.items():
             extract_still(ref, frame, folder / "stills" / f"{label}.png", crop=crop)
+        measures = measure_clip(folder / "ref.mp4")
         write_json(pp.sheet_file(shot.index), {
             "schema": 1, "shot": shot.index, "start": shot.start, "end": shot.end,
             "frames": shot.frames, "picture_box": box.to_dict(),
             "stills": {label: f"stills/{label}.png" for label in stills},
-            "camera": None, "color": None, "flicker": None,
+            "camera": measures["camera"], "color": measures["color"], "flicker": measures["flicker"],
             "elements": [], "pose": None, "depth": None, "mattes": None,
             "audio_hits": [], "dialogue": [],
         })
