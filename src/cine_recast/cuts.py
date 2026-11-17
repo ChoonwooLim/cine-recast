@@ -14,6 +14,7 @@ SIG_SIZE = (64, 36)     # (w, h) of the gray signature each frame is reduced to
 MIN_DIFF = 5.0          # a cut changes the picture by at least this mean absolute difference (0-255)
 PEAK_RATIO = 3.0        # ... and by at least this many times the median of its neighbours
 WINDOW = 8              # neighbours taken on each side of a frame for that median
+ISOLATION_FACTOR = 2.0  # a cut is a lone spike: rejects broad peaks such as a fast occluder sweep
 FLASH_FACTOR = 0.5      # a change that returns this close to the frame before it is a flash
 
 
@@ -61,9 +62,10 @@ def detect_cuts(path: Path, info: VideoInfo, box: PictureBox) -> list[int]:
 
     Each frame's picture area is reduced to a 64x36 gray signature. Frame i is a candidate when
     its difference from frame i-1 is at least MIN_DIFF and at least PEAK_RATIO times the median
-    difference of the WINDOW frames on each side. A candidate whose picture returns, one or two
-    frames later, to within FLASH_FACTOR of its change from frame i-1 is a flash: the candidates
-    from i through that frame are dropped.
+    difference of the WINDOW frames on each side, and at least ISOLATION_FACTOR times the larger
+    of the two adjacent differences (an adjacent difference that does not exist is ignored).
+    A candidate whose picture returns, one or two frames later, to within FLASH_FACTOR of its
+    change from frame i-1 is a flash: the candidates from i through that frame are dropped.
     """
     path = Path(path)
     inside = box.x >= 0 and box.y >= 0 and box.x + box.w <= info.width and box.y + box.h <= info.height
@@ -78,7 +80,8 @@ def detect_cuts(path: Path, info: VideoInfo, box: PictureBox) -> list[int]:
     for i in range(1, n):
         neighbours = [d[j] for j in range(max(1, i - WINDOW), min(n, i + WINDOW + 1)) if j != i]
         median = float(np.median(neighbours)) if neighbours else 0.0
-        if d[i] >= MIN_DIFF and d[i] >= PEAK_RATIO * median:
+        adjacent = max((d[j] for j in (i - 1, i + 1) if 1 <= j < n), default=0.0)
+        if d[i] >= MIN_DIFF and d[i] >= PEAK_RATIO * median and d[i] >= ISOLATION_FACTOR * adjacent:
             candidates.append(i)
 
     flashes: set[int] = set()

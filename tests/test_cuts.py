@@ -1,5 +1,5 @@
 import pytest
-from conftest import make_clip
+from conftest import make_clip, make_sweep_clip
 
 from cine_recast.cuts import Shot, detect_cuts, shots_from_cuts
 from cine_recast.errors import CineRecastError
@@ -33,6 +33,10 @@ def test_three_frame_insert_gives_two_cuts(tmp_path):
 def test_cuts_inside_letterbox(tmp_path):
     p = make_clip(tmp_path / "l.mp4", [("testsrc2", 30), ("smptebars", 24)], bars=28, dark=True)
     assert detect_cuts(p, probe(p), PictureBox(0, 28, 384, 160)) == [30]
+
+
+def test_fast_occluder_sweep_is_not_a_cut(tmp_path):
+    assert cuts_of(make_sweep_clip(tmp_path / "s.mp4")) == []
 
 
 def test_shots_from_cuts():

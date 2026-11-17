@@ -93,6 +93,29 @@ def make_motion_clip(path: Path, kind: str, *, frames: int = 24, rate: float = 4
     return path
 
 
+def make_sweep_clip(path: Path, *, frames: int = 40, sweep_start: int = 18,
+                    size: tuple[int, int] = (384, 216)) -> Path:
+    """One static smptebars shot, no cut, crossed by a fast occluder.
+
+    A full-height black box 5/12 of the frame wide is just off the left edge at frame
+    sweep_start and just off the right edge at frame sweep_start + 5, eased so it moves fastest
+    in the middle. The frame differences form a broad peak instead of one isolated spike.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    w, h = size
+    box_w = w * 5 // 12
+    p = f"clip((t*24-{sweep_start})/5,0,1)"
+    x = f"{w + box_w}*{p}*{p}*(3-2*{p})-{box_w}"
+    graph = (f"[0:v]trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[bg];"
+             f"[1:v]setsar=1,format=yuv420p[box];"
+             f"[bg][box]overlay=x='{x}':y=0:eval=frame:shortest=1,format=yuv420p[out]")
+    _run(["-f", "lavfi", "-i", f"smptebars=size={w}x{h}:rate=24",
+          "-f", "lavfi", "-i", f"color=c=black:size={box_w}x{h}:rate=24",
+          "-filter_complex", graph, "-map", "[out]", "-frames:v", str(frames), *_encode_args(path)])
+    return path
+
+
 @pytest.fixture(scope="session")
 def clip3(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("clips") / "clip3.mp4"
