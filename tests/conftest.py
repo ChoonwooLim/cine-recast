@@ -25,6 +25,8 @@ def make_clip(path: Path, segments: list[tuple[str, int]], *, size: tuple[int, i
               dark: bool = False, audio: bool = False) -> Path:
     """Build a clip from lavfi sources. segments: (source name, frame count) pairs.
 
+    A source may carry its own options, such as "color=c=white"; size and rate are appended.
+
     bars is the pixel height of black bands at the top and bottom (total size stays `size`).
     side_bars is the pixel width of black bands at the left and right.
     logo draws a 24x12 white box at the left of the top band.
@@ -36,7 +38,8 @@ def make_clip(path: Path, segments: list[tuple[str, int]], *, size: tuple[int, i
     args: list[str] = []
     chains: list[str] = []
     for i, (source, frames) in enumerate(segments):
-        args += ["-f", "lavfi", "-i", f"{source}=size={w}x{h}:rate={fps}"]
+        sep = ":" if "=" in source else "="
+        args += ["-f", "lavfi", "-i", f"{source}{sep}size={w}x{h}:rate={fps}"]
         chains.append(f"[{i}:v]trim=end_frame={frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v{i}]")
     if audio:
         args += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"]
