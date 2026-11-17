@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" width="1200" height="470" role="img" aria-label="What stays and what changes between the reference and the recast">
+  <defs>
+    <linearGradient id="refSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8794a6"/><stop offset="1" stop-color="#4a5666"/></linearGradient>
+    <linearGradient id="newSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8c47e"/><stop offset="1" stop-color="#c4574a"/></linearGradient>
+    <clipPath id="c1"><rect x="150" y="70" width="300" height="126" rx="6"/></clipPath>
+    <clipPath id="c2"><rect x="462" y="70" width="210" height="126" rx="6"/></clipPath>
+    <clipPath id="c3"><rect x="684" y="70" width="366" height="126" rx="6"/></clipPath>
+    <clipPath id="d1"><rect x="150" y="270" width="300" height="126" rx="6"/></clipPath>
+    <clipPath id="d2"><rect x="462" y="270" width="210" height="126" rx="6"/></clipPath>
+    <clipPath id="d3"><rect x="684" y="270" width="366" height="126" rx="6"/></clipPath>
+  </defs>
+
+  <rect width="1200" height="470" rx="16" fill="#f7f9fc" stroke="#d9e0ea"/>
+  <g font-family="'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Arial, sans-serif">
+
+    <!-- row labels -->
+    <text x="40" y="128" font-size="19" font-weight="700" fill="#334155">원본</text>
+    <text x="40" y="150" font-size="14" fill="#64748b">Reference</text>
+    <text x="40" y="328" font-size="19" font-weight="700" fill="#b45309">재제작</text>
+    <text x="40" y="350" font-size="14" fill="#b45309">Recast</text>
+
+    <!-- reference shots -->
+    <g clip-path="url(#c1)">
+      <rect x="150" y="70" width="300" height="126" fill="url(#refSky)"/>
+      <path d="M150 176 L214 138 L270 164 L330 122 L450 172 L450 196 L150 196 Z" fill="#2b3644"/>
+      <circle cx="250" cy="122" r="16" fill="#dbe3ec"/><path d="M220 196 C220 160 233 143 250 143 C267 143 280 160 280 196 Z" fill="#dbe3ec"/>
+    </g>
+    <g clip-path="url(#c2)">
+      <rect x="462" y="70" width="210" height="126" fill="url(#refSky)"/>
+      <path d="M462 180 L520 150 L590 170 L672 140 L672 196 L462 196 Z" fill="#2b3644"/>
+      <circle cx="567" cy="112" r="24" fill="#dbe3ec"/><path d="M522 196 C522 158 542 142 567 142 C592 142 612 158 612 196 Z" fill="#dbe3ec"/>
+    </g>
+    <g clip-path="url(#c3)">
+      <rect x="684" y="70" width="366" height="126" fill="url(#refSky)"/>
+      <path d="M684 170 L760 128 L840 160 L930 118 L1050 166 L1050 196 L684 196 Z" fill="#2b3644"/>
+      <circle cx="930" cy="140" r="10" fill="#dbe3ec"/><path d="M913 196 C913 168 920 154 930 154 C940 154 947 168 947 196 Z" fill="#dbe3ec"/>
+    </g>
+
+    <!-- recast shots: same layout, new person, new backdrop -->
+    <g clip-path="url(#d1)">
+      <rect x="150" y="270" width="300" height="126" fill="url(#newSky)"/>
+      <path d="M150 380 C210 348 262 366 318 346 C372 328 420 352 450 342 L450 396 L150 396 Z" fill="#7a3040"/>
+      <circle cx="250" cy="322" r="16" fill="#16324f"/><path d="M220 396 C220 360 233 343 250 343 C267 343 280 360 280 396 Z" fill="#16324f"/>
+    </g>
+    <g clip-path="url(#d2)">
+      <rect x="462" y="270" width="210" height="126" fill="url(#newSky)"/>
+      <path d="M462 382 C520 356 580 372 672 346 L672 396 L462 396 Z" fill="#7a3040"/>
+      <circle cx="567" cy="312" r="24" fill="#16324f"/><path d="M522 396 C522 358 542 342 567 342 C592 342 612 358 612 396 Z" fill="#16324f"/>
+    </g>
+    <g clip-path="url(#d3)">
+      <rect x="684" y="270" width="366" height="126" fill="url(#newSky)"/>
+      <path d="M684 376 C770 340 850 366 930 344 C990 328 1020 350 1050 340 L1050 396 L684 396 Z" fill="#7a3040"/>
+      <circle cx="930" cy="340" r="10" fill="#16324f"/><path d="M913 396 C913 368 920 354 930 354 C940 354 947 368 947 396 Z" fill="#16324f"/>
+    </g>
+
+    <!-- frames -->
+    <g fill="none" stroke="#475569" stroke-width="2">
+      <rect x="150" y="70" width="300" height="126" rx="6"/><rect x="462" y="70" width="210" height="126" rx="6"/><rect x="684" y="70" width="366" height="126" rx="6"/>
+    </g>
+    <g fill="none" stroke="#d97706" stroke-width="2">
+      <rect x="150" y="270" width="300" height="126" rx="6"/><rect x="462" y="270" width="210" height="126" rx="6"/><rect x="684" y="270" width="366" height="126" rx="6"/>
+    </g>
+
+    <!-- shot labels -->
+    <g font-size="13" fill="#64748b">
+      <text x="150" y="60">숏 1 · 30 프레임</text><text x="462" y="60">숏 2 · 21 프레임</text><text x="684" y="60">숏 3 · 37 프레임</text>
+    </g>
+
+    <!-- cut alignment guides -->
+    <g stroke="#0ea5e9" stroke-width="2" stroke-dasharray="6 6">
+      <path d="M456 52 V412"/><path d="M678 52 V412"/>
+    </g>
+    <g font-size="13" font-weight="600" fill="#0369a1">
+      <text x="456" y="434" text-anchor="middle">컷 위치 동일</text>
+      <text x="678" y="434" text-anchor="middle">컷 위치 동일</text>
+    </g>
+
+    <!-- what stays / what changes -->
+    <g font-size="15">
+      <rect x="150" y="212" width="900" height="42" rx="8" fill="#eef2f7"/>
+      <text x="170" y="239" font-weight="700" fill="#334155">그대로</text>
+      <text x="232" y="239" fill="#475569">컷 위치 · 숏 길이 · 화면비 · 카메라 움직임 · 구도 · 동작</text>
+      <text x="668" y="239" font-weight="700" fill="#b45309">바뀜</text>
+      <text x="716" y="239" fill="#92400e">지정한 인물 · 지정한 배경 · 그 밖에 지정한 요소</text>
+    </g>
+
+    <!-- right-hand notes -->
+    <g font-size="13" fill="#475569">
+      <text x="1068" y="128">참조 영상</text><text x="1068" y="146">측정의 기준</text>
+      <text x="1068" y="310" font-weight="700" fill="#16324f">인물 교체</text><text x="1068" y="328">사진으로 지정</text>
+      <text x="1068" y="360" font-weight="700" fill="#7a3040">배경 교체</text><text x="1068" y="378">이미지로 지정</text>
+    </g>
+  </g>
+</svg>

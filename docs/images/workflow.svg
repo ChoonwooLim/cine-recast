@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="CineRecast workflow in eight steps and who performs each step">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowRetry" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="560" rx="16" fill="#f7f9fc" stroke="#d9e0ea"/>
+  <g font-family="'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Arial, sans-serif">
+
+    <text x="40" y="52" font-size="24" font-weight="800" fill="#0f172a">작업 흐름</text>
+    <text x="150" y="52" font-size="16" fill="#64748b">Workflow</text>
+
+    <!-- legend -->
+    <g font-size="14" font-weight="600">
+      <rect x="760" y="32" width="14" height="14" rx="3" fill="#2563eb"/><text x="782" y="45" fill="#1e3a8a">도구 Tool</text>
+      <rect x="884" y="32" width="14" height="14" rx="3" fill="#7c3aed"/><text x="906" y="45" fill="#4c1d95">에이전트 Agent</text>
+      <rect x="1044" y="32" width="14" height="14" rx="3" fill="#d97706"/><text x="1066" y="45" fill="#92400e">사용자 User</text>
+    </g>
+
+    <!-- row 1 -->
+    <g>
+      <rect x="40" y="84" width="252" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="72" cy="116" r="16" fill="#0f172a"/><text x="72" y="122" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+      <text x="98" y="114" font-size="19" font-weight="700" fill="#0f172a">가져오기</text>
+      <text x="98" y="134" font-size="13" fill="#64748b">Ingest</text>
+      <text x="60" y="170" font-size="14" fill="#334155">참조 영상을 프로젝트에 등록</text>
+      <text x="60" y="192" font-size="14" fill="#334155">권리 확인 세 항목을 기록</text>
+      <rect x="60" y="216" width="48" height="24" rx="12" fill="#dbeafe"/><text x="84" y="233" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle">도구</text>
+      <rect x="114" y="216" width="60" height="24" rx="12" fill="#fef3c7"/><text x="144" y="233" font-size="12" font-weight="700" fill="#92400e" text-anchor="middle">사용자</text>
+    </g>
+    <g>
+      <rect x="328" y="84" width="252" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="360" cy="116" r="16" fill="#0f172a"/><text x="360" y="122" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+      <text x="386" y="114" font-size="19" font-weight="700" fill="#0f172a">분석</text>
+      <text x="386" y="134" font-size="13" fill="#64748b">Analyze</text>
+      <text x="348" y="170" font-size="14" fill="#334155">화면 영역, 컷, 숏별 측정</text>
+      <text x="348" y="192" font-size="14" fill="#334155">컷은 이미지로 눈 검수</text>
+      <rect x="348" y="216" width="48" height="24" rx="12" fill="#dbeafe"/><text x="372" y="233" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle">도구</text>
+      <rect x="402" y="216" width="72" height="24" rx="12" fill="#ede9fe"/><text x="438" y="233" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle">에이전트</text>
+    </g>
+    <g>
+      <rect x="616" y="84" width="252" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="648" cy="116" r="16" fill="#0f172a"/><text x="648" y="122" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+      <text x="674" y="114" font-size="19" font-weight="700" fill="#0f172a">배역·장면 확정</text>
+      <text x="674" y="134" font-size="13" fill="#64748b">Cast</text>
+      <text x="636" y="170" font-size="14" fill="#334155">등장 요소를 식별</text>
+      <text x="636" y="192" font-size="14" fill="#334155">인물·배경 교체표 작성</text>
+      <rect x="636" y="216" width="72" height="24" rx="12" fill="#ede9fe"/><text x="672" y="233" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle">에이전트</text>
+      <rect x="714" y="216" width="60" height="24" rx="12" fill="#fef3c7"/><text x="744" y="233" font-size="12" font-weight="700" fill="#92400e" text-anchor="middle">사용자</text>
+    </g>
+    <g>
+      <rect x="904" y="84" width="256" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="936" cy="116" r="16" fill="#0f172a"/><text x="936" y="122" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+      <text x="962" y="114" font-size="19" font-weight="700" fill="#0f172a">계획</text>
+      <text x="962" y="134" font-size="13" fill="#64748b">Plan</text>
+      <text x="924" y="170" font-size="14" fill="#334155">생성 단위와 입력 자료 구성</text>
+      <text x="924" y="192" font-size="14" fill="#334155">단위별 영어 프롬프트 작성</text>
+      <rect x="924" y="216" width="48" height="24" rx="12" fill="#dbeafe"/><text x="948" y="233" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle">도구</text>
+      <rect x="978" y="216" width="72" height="24" rx="12" fill="#ede9fe"/><text x="1014" y="233" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle">에이전트</text>
+    </g>
+
+    <!-- row 1 arrows -->
+    <g stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)">
+      <path d="M296 172 H322"/><path d="M584 172 H610"/><path d="M872 172 H898"/>
+      <path d="M1032 264 V290 H166 V316"/>
+    </g>
+
+    <!-- row 2 -->
+    <g>
+      <rect x="40" y="322" width="252" height="176" rx="12" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+      <circle cx="72" cy="354" r="16" fill="#b45309"/><text x="72" y="360" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+      <text x="98" y="352" font-size="19" font-weight="700" fill="#0f172a">비용 승인</text>
+      <text x="98" y="372" font-size="13" fill="#64748b">Approve</text>
+      <text x="60" y="408" font-size="14" fill="#334155">예상 크레딧을 확인</text>
+      <text x="60" y="430" font-size="14" fill="#334155">한도를 정해 승인</text>
+      <rect x="60" y="454" width="60" height="24" rx="12" fill="#fef3c7"/><text x="90" y="471" font-size="12" font-weight="700" fill="#92400e" text-anchor="middle">사용자</text>
+    </g>
+    <g>
+      <rect x="328" y="322" width="252" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="360" cy="354" r="16" fill="#0f172a"/><text x="360" y="360" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">6</text>
+      <text x="386" y="352" font-size="19" font-weight="700" fill="#0f172a">생성</text>
+      <text x="386" y="372" font-size="13" fill="#64748b">Generate</text>
+      <text x="348" y="408" font-size="14" fill="#334155">도구가 발급한 작업만 실행</text>
+      <text x="348" y="430" font-size="14" fill="#334155">결과는 테이크로 보관</text>
+      <rect x="348" y="454" width="72" height="24" rx="12" fill="#ede9fe"/><text x="384" y="471" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle">에이전트</text>
+    </g>
+    <g>
+      <rect x="616" y="322" width="252" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="648" cy="354" r="16" fill="#0f172a"/><text x="648" y="360" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">7</text>
+      <text x="674" y="352" font-size="19" font-weight="700" fill="#0f172a">맞춤·검수</text>
+      <text x="674" y="372" font-size="13" fill="#64748b">Conform &amp; Score</text>
+      <text x="636" y="408" font-size="14" fill="#334155">프레임 수와 화면을 원본에 맞춤</text>
+      <text x="636" y="430" font-size="14" fill="#334155">숏마다 일치도 점수 계산</text>
+      <rect x="636" y="454" width="48" height="24" rx="12" fill="#dbeafe"/><text x="660" y="471" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle">도구</text>
+      <rect x="690" y="454" width="72" height="24" rx="12" fill="#ede9fe"/><text x="726" y="471" font-size="12" font-weight="700" fill="#4c1d95" text-anchor="middle">에이전트</text>
+    </g>
+    <g>
+      <rect x="904" y="322" width="256" height="176" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <circle cx="936" cy="354" r="16" fill="#0f172a"/><text x="936" y="360" font-size="16" font-weight="700" fill="#ffffff" text-anchor="middle">8</text>
+      <text x="962" y="352" font-size="19" font-weight="700" fill="#0f172a">조립</text>
+      <text x="962" y="372" font-size="13" fill="#64748b">Assemble</text>
+      <text x="924" y="408" font-size="14" fill="#334155">완성본, 비교 영상, 보고서</text>
+      <text x="924" y="430" font-size="14" fill="#334155">최종 합격 판단은 사용자</text>
+      <rect x="924" y="454" width="48" height="24" rx="12" fill="#dbeafe"/><text x="948" y="471" font-size="12" font-weight="700" fill="#1e3a8a" text-anchor="middle">도구</text>
+      <rect x="978" y="454" width="60" height="24" rx="12" fill="#fef3c7"/><text x="1008" y="471" font-size="12" font-weight="700" fill="#92400e" text-anchor="middle">사용자</text>
+    </g>
+
+    <!-- row 2 arrows -->
+    <g stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)">
+      <path d="M296 410 H322"/><path d="M584 410 H610"/><path d="M872 410 H898"/>
+    </g>
+
+    <!-- retry loop -->
+    <path d="M742 502 V528 H454 V504" stroke="#dc2626" stroke-width="2.5" fill="none" stroke-dasharray="7 6" marker-end="url(#arrowRetry)"/>
+    <text x="598" y="548" font-size="13" font-weight="600" fill="#b91c1c" text-anchor="middle">기준에 못 미친 숏은 승인 한도 안에서 다시 생성</text>
+  </g>
+</svg>

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="How paid generation is gated by a recorded approval">
+  <defs>
+    <marker id="la" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="300" rx="16" fill="#f7f9fc" stroke="#d9e0ea"/>
+  <g font-family="'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Arial, sans-serif">
+    <text x="40" y="50" font-size="24" font-weight="800" fill="#0f172a">비용 승인 장부</text>
+    <text x="216" y="50" font-size="16" fill="#64748b">Approval ledger</text>
+
+    <g>
+      <rect x="40" y="86" width="196" height="118" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <text x="138" y="124" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">비용 조회</text>
+      <text x="138" y="146" font-size="13" fill="#64748b" text-anchor="middle">Quote</text>
+      <text x="138" y="178" font-size="13" fill="#334155" text-anchor="middle">작업별 예상 크레딧</text>
+    </g>
+    <g>
+      <rect x="272" y="86" width="196" height="118" rx="12" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+      <text x="370" y="124" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">승인</text>
+      <text x="370" y="146" font-size="13" fill="#64748b" text-anchor="middle">Approve</text>
+      <text x="370" y="178" font-size="13" fill="#334155" text-anchor="middle">사용자가 한도를 정함</text>
+    </g>
+    <g>
+      <rect x="504" y="86" width="196" height="118" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <text x="602" y="124" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">작업 발급</text>
+      <text x="602" y="146" font-size="13" fill="#64748b" text-anchor="middle">Issue</text>
+      <text x="602" y="178" font-size="13" fill="#334155" text-anchor="middle">한도 안의 작업만 내보냄</text>
+    </g>
+    <g>
+      <rect x="736" y="86" width="196" height="118" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <text x="834" y="124" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">실행 · 기록</text>
+      <text x="834" y="146" font-size="13" fill="#64748b" text-anchor="middle">Run &amp; record</text>
+      <text x="834" y="178" font-size="13" fill="#334155" text-anchor="middle">실제 사용 크레딧을 기록</text>
+    </g>
+    <g>
+      <rect x="968" y="86" width="192" height="118" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+      <text x="1064" y="124" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">장부 점검</text>
+      <text x="1064" y="146" font-size="13" fill="#64748b" text-anchor="middle">Audit</text>
+      <text x="1064" y="178" font-size="13" fill="#334155" text-anchor="middle">사용 내역과 대조</text>
+    </g>
+
+    <g stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#la)">
+      <path d="M240 145 H266"/><path d="M472 145 H498"/><path d="M704 145 H730"/><path d="M936 145 H962"/>
+    </g>
+
+    <g font-size="14" font-weight="600" fill="#b91c1c">
+      <rect x="406" y="228" width="388" height="40" rx="20" fill="#fee2e2"/>
+      <text x="600" y="253" text-anchor="middle">승인이 없거나 한도를 넘으면 발급을 거부하고 멈춤</text>
+    </g>
+    <path d="M602 208 V224" stroke="#dc2626" stroke-width="2.5" fill="none"/>
+  </g>
+</svg>
