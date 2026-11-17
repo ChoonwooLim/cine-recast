@@ -155,7 +155,7 @@ def test_paths_layout(tmp_path):
 def test_repository_folder_has_no_han_characters():
     root = Path(__file__).resolve().parents[1]
     exts = {".py", ".md", ".json", ".toml", ".ps1", ".txt", ".yaml", ".yml", ".cfg"}
-    skip = {".git", ".venv", "__pycache__", ".pytest_cache"}
+    skip = {".git", ".venv", "__pycache__", ".pytest_cache", ".superpowers"}
     bad = {str(p.relative_to(root)): han_chars(p.read_text(encoding="utf-8"))
            for p in root.rglob("*") if p.is_file() and p.suffix in exts and not (set(p.parts) & skip)}
     assert {k: v for k, v in bad.items() if v} == {}
@@ -199,7 +199,7 @@ Expected: 8 passed
 - [ ] **Step 6: 커밋**
 
 ```powershell
-git add pyproject.toml .gitignore README.md install.ps1 src tests docs
+git add pyproject.toml .gitignore .gitattributes README.md install.ps1 src tests
 git commit -m "feat: cine-recast package scaffold and shared modules" -m "Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>"
 ```
 
@@ -811,7 +811,7 @@ def test_audit(tmp_path):
 
 - `check_models`: `id`, `kind`(`"video"` 또는 `"image"`), `min_seconds <= max_seconds`, 비어 있지 않은 `aspect_ratios`와 `resolutions`, 불리언 `video_ref`, 0 이상의 정수 `image_refs`, `read_at`.
 - `build`: `casting.check`와 `check_models`가 깨끗해야 한다. `method="edit"`는 `video_ref`가 true인 모델만 허용. 숏을 앞에서부터 묶되 단위 길이가 `min(model.max_seconds, max_unit_seconds)` 이하인 동안 이어 붙인다. 숏 하나가 한도를 넘으면 `CineRecastError`. `params.duration = max(model.min_seconds, ceil(단위 길이 초))`. `params.aspect_ratio`는 모델 목록 중 화면 영역 비율에 가장 가까운 것. `params.resolution`은 `draft`이면 목록의 첫 번째, `final`이면 마지막. 단위 참조 클립 `analysis/units/uNN/ref.mp4`를 만든다(화면 영역, H.264, 오디오 없음). `inputs`: `edit`는 참조 클립(`role: "video"`), `regen`은 단위 첫 숏의 `stills/first.png`(`role: "image"`), 이어서 `swaps_for_shots`의 이미지를 요소 순서대로 붙이되 `image_refs`를 넘지 않게 한다. 넘으면 `CineRecastError`. 단위마다 작업 하나를 `planned`로 만든다. `plan.json`이 이미 있으면 `replace=True`이고 발급된 작업이 없을 때만 다시 만든다.
-- `check`: 모든 단위의 `prompt`가 `is_english_prompt`를 통과, `inputs`의 파일이 존재, `params.duration`이 모델 범위 안, `params.aspect_ratio`와 `params.resolution`이 모델 목록에 있음.
+- `check`: 모든 단위의 `prompt`가 `is_english_prompt`를 통과, `inputs`의 파일이 존재, `params.duration`이 `min_seconds` 이상 `ceil(max_seconds)` 이하, `params.aspect_ratio`와 `params.resolution`이 모델 목록에 있음.
 - 작업 상태: `planned` → `set_cost` 후 `quoted` → `issue_next` 후 `issued` → `done` 또는 `failed`. `issue_next`는 `check`가 깨끗해야 하고, 묶음의 `quoted` 작업을 번호 순으로 `ledger.issue`에 넘긴다. 거부되면 그 자리에서 `CineRecastError`를 내고, 그 전에 발급된 작업은 `issued`로 남는다.
 - `record_done`은 `ledger.done` 뒤에 `takes.new_take`를 부른다. `meta.json`은 `{"job", "provider_id", "credits", "quality", "recorded_at"}`.
 
@@ -911,7 +911,7 @@ def test_takes_are_never_overwritten(planned3, clip3):
 
 규칙: 결과 클립은 참조 영상과 같은 전체 프레임 크기, 같은 프레임 속도(분수 그대로), ProRes 422 HQ다. 화면은 참조의 화면 영역 위치에 놓이고 나머지는 검정이다. 필터 순서는 `fps=<num>/<den>` → `scale=<bw>:<bh>:force_original_aspect_ratio=increase` → `crop=<bw>:<bh>` → `pad=<W>:<H>:<bx>:<by>:black` → 프레임 범위 자르기. `source_frames`는 프레임 속도 변환 뒤의 프레임 수다. `source_frames - start_frame < unit_frames`이면 `allow_retime`이 없을 때 `CineRecastError("take too short: have X frames, need Y")`. `allow_retime`이면 `start_frame` 이후 전체를 `unit_frames`에 정확히 맞게 고르게 다시 샘플링한다. 끝나면 숏마다 프레임 수를 `probe`로 확인하고 다르면 `CineRecastError`.
 
-- [ ] **Step 1: 실패하는 테스트 작성** — 도우미 `fake_take(root, unit_id, tmp_path, *, size=(640, 360), fps="30", extra_frames=12, filters="")`를 `conftest.py`에 추가: 단위 참조 클립을 주어진 크기·프레임 속도로 바꾸고 뒤에 여분을 붙여 `new_take`로 등록하고 테이크 번호를 반환.
+- [ ] **Step 1: 실패하는 테스트 작성** — 도우미 `fake_take(root, unit_id, tmp_path, *, size=(640, 360), fps=None, extra_frames=12, filters="")`를 `conftest.py`에 추가: 단위 참조 클립을 주어진 크기로 바꾸고(`fps`를 주면 그 프레임 속도로도 바꾸고, `None`이면 참조와 같은 프레임 속도를 유지) 뒤에 `extra_frames`만큼 마지막 프레임을 이어 붙여(음수이면 그만큼 잘라) `new_take`로 등록하고 테이크 번호를 반환. `extra_frames`는 테이크 자신의 프레임 속도 기준이다.
 
 ```python
 def shot_frames(paths):
