@@ -8,7 +8,7 @@ from cine_recast import ledger as ledger_module
 from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import append_jsonl
-from cine_recast.ledger import approve, audit, batch_status, done, fail, issue, job_states
+from cine_recast.ledger import approve, audit, batch_status, budget_status, done, fail, issue, job_states, set_budget
 from cine_recast.paths import ProjectPaths
 
 
@@ -57,7 +57,8 @@ def test_audit(tmp_path):
     approve(tmp_path, "b", 100.0, "owner"); issue(tmp_path, "j0001", "b", 10.0); done(tmp_path, "j0001", "prov-1", 9.0)
     assert audit(tmp_path) == {"ok": True, "problems": [], "provider_ids": ["prov-1"],
                                "batches": {"b": {"limit": 100.0, "committed": 9.0, "remaining": 91.0}},
-                               "totals": {"limit": 100.0, "committed": 9.0, "remaining": 91.0}}
+                               "totals": {"limit": 100.0, "committed": 9.0, "remaining": 91.0},
+                               "budget": None}
     append_jsonl(ProjectPaths(tmp_path).ledger_file,
                  {"type": "job_done", "time": "x", "job_id": "j0777", "provider_id": "prov-x", "credits": 500.0})
     report = audit(tmp_path)
@@ -134,6 +135,11 @@ _BAD_LINES = {
     "empty_id": '{"type": "job_issued", "time": "x", "job_id": "", "batch": "b", "est_credits": 5.0}\n',
     "not_an_object": '[1, 2]\n',
     "partial_last_line": '{"type": "job_issued", "time": "x", "job_id": "j2", "ba',
+    "budget_nan": '{"type": "budget", "time": "x", "limit_credits": NaN, "by": "o", "note": ""}\n',
+    "budget_zero": '{"type": "budget", "time": "x", "limit_credits": 0, "by": "o", "note": ""}\n',
+    "budget_string": '{"type": "budget", "time": "x", "limit_credits": "500", "by": "o", "note": ""}\n',
+    "budget_without_by": '{"type": "budget", "time": "x", "limit_credits": 500.0, "note": ""}\n',
+    "budget_without_time": '{"type": "budget", "limit_credits": 500.0, "by": "o", "note": ""}\n',
 }
 
 
@@ -145,7 +151,10 @@ def test_damaged_ledger_fails_closed(tmp_path, bad):
     for call in (lambda: issue(tmp_path, "j9", "b", 1.0),
                  lambda: done(tmp_path, "j1", "p", 1.0),
                  lambda: fail(tmp_path, "j1", "r"),
-                 lambda: batch_status(tmp_path, "b")):
+                 lambda: batch_status(tmp_path, "b"),
+                 lambda: approve(tmp_path, "c", 1.0, "owner"),
+                 lambda: set_budget(tmp_path, 500.0, "owner"),
+                 lambda: budget_status(tmp_path)):
         with pytest.raises(CineRecastError, match="line 3"):
             call()
     report = audit(tmp_path)
@@ -260,3 +269,79 @@ def test_job_states(tmp_path):
     _raw(tmp_path, '[1, 2]\n')
     with pytest.raises(CineRecastError, match="damaged"):
         job_states(tmp_path)
+
+
+# --- task 20: the project budget ---
+
+def test_without_a_budget_approve_is_unbounded(tmp_path):
+    assert budget_status(tmp_path) is None
+    approve(tmp_path, "a", 10_000.0, "owner")
+    assert audit(tmp_path)["budget"] is None
+
+
+def test_approve_stays_inside_the_budget(tmp_path):
+    record = set_budget(tmp_path, 100.0, "owner", note="whole project")
+    assert (record["type"], record["limit_credits"], record["by"], record["note"]) == ("budget", 100.0, "owner",
+                                                                                        "whole project")
+    approve(tmp_path, "assets-1", 30.0, "owner")
+    approve(tmp_path, "draft-1", 70.0, "owner")                        # exactly the budget
+    before = ProjectPaths(tmp_path).ledger_file.read_bytes()
+    with pytest.raises(CineRecastError, match="budget") as refused:
+        approve(tmp_path, "final-1", 0.5, "owner")
+    assert "100.5" in refused.value.message and "budget set" in refused.value.message
+    assert ProjectPaths(tmp_path).ledger_file.read_bytes() == before   # nothing appended
+    assert budget_status(tmp_path) == {"limit": 100.0, "by": "owner", "approved": 100.0, "remaining": 0.0}
+
+
+def test_a_later_budget_line_replaces_the_limit(tmp_path):
+    set_budget(tmp_path, 50.0, "owner")
+    approve(tmp_path, "b", 40.0, "owner")
+    with pytest.raises(CineRecastError, match="budget"):
+        approve(tmp_path, "c", 20.0, "owner")
+    set_budget(tmp_path, 80.0, "owner", note="raised")
+    approve(tmp_path, "c", 20.0, "owner")
+    assert budget_status(tmp_path) == {"limit": 80.0, "by": "owner", "approved": 60.0, "remaining": 20.0}
+    set_budget(tmp_path, 30.0, "owner")                                # lowered below what is approved
+    assert budget_status(tmp_path)["remaining"] == -30.0
+    with pytest.raises(CineRecastError, match="budget"):
+        approve(tmp_path, "d", 1.0, "owner")
+
+
+@pytest.mark.parametrize("call", [
+    lambda r: set_budget(r, 0.0, "owner"),
+    lambda r: set_budget(r, -5.0, "owner"),
+    lambda r: set_budget(r, float("nan"), "owner"),
+    lambda r: set_budget(r, float("inf"), "owner"),
+    lambda r: set_budget(r, True, "owner"),
+    lambda r: set_budget(r, 100.0, " "),
+])
+def test_budget_refusals_write_nothing(tmp_path, call):
+    with pytest.raises(CineRecastError):
+        call(tmp_path)
+    assert not ProjectPaths(tmp_path).ledger_file.exists()
+
+
+def test_audit_shows_the_budget_and_flags_an_approval_beyond_it(tmp_path):
+    set_budget(tmp_path, 100.0, "owner")
+    approve(tmp_path, "b", 60.0, "owner"); issue(tmp_path, "j1", "b", 10.0); done(tmp_path, "j1", "p", 8.0)
+    report = audit(tmp_path)
+    assert report["ok"] is True
+    assert report["budget"] == {"limit": 100.0, "by": "owner", "approved": 60.0, "remaining": 40.0}
+    append_jsonl(ProjectPaths(tmp_path).ledger_file,                  # an approval written by hand past the budget
+                 {"type": "approval", "time": "x", "batch": "c", "limit_credits": 50.0, "by": "o", "note": ""})
+    report = audit(tmp_path)
+    assert report["ok"] is False and report["budget"]["remaining"] == -10.0
+    assert any("batch 'c'" in p and "budget" in p for p in report["problems"])
+
+
+def test_cli_budget_set_and_approve(project3, capsys):
+    root = str(project3.root)
+    capsys.readouterr()
+    assert main(["budget", "set", root, "--limit", "100", "--by", "owner", "--note", "whole project"]) == 0
+    assert capsys.readouterr().out.strip() == "budget: limit 100.0, approved 0.0, remaining 100.0 (by owner)"
+    assert main(["approve", root, "--batch", "b", "--limit", "60", "--by", "owner"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "budget: limit 100.0, approved 60.0, remaining 40.0 (by owner)"
+    assert main(["approve", root, "--batch", "c", "--limit", "41", "--by", "owner"]) == 2
+    assert "budget" in capsys.readouterr().err
+    assert main(["audit", root]) == 0
+    assert json.loads(capsys.readouterr().out)["budget"]["remaining"] == 40.0

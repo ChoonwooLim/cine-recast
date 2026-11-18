@@ -3,7 +3,11 @@
 State is recomputed from the append-only ledger.jsonl on every call. No cache file,
 and existing lines are never rewritten.
 
-Every writer (approve, issue, done, fail) holds an exclusive OS lock on the sidecar file
+A budget line sets the project budget (the latest one counts): while one is set, approve refuses
+an approval that would bring the sum of all batch limits above it. Without a budget line approve
+is bounded only by what the user approves.
+
+Every writer (set_budget, approve, issue, done, fail) holds an exclusive OS lock on the sidecar file
 ledger.lock for its whole read-check-append, so two commands at the same moment cannot both pass
 a limit or issue one id twice. The operating system releases the lock when the process ends, so
 a killed command leaves no stale lock behind.
@@ -101,6 +105,7 @@ def _is_amount(value, *, positive: bool) -> bool:
 
 # type -> list of (key, check) pairs; every key is required
 _SCHEMA = {
+    "budget": [("limit_credits", lambda v: _is_amount(v, positive=True)), ("by", _is_text)],
     "approval": [("batch", _is_text), ("limit_credits", lambda v: _is_amount(v, positive=True)),
                  ("by", _is_text)],
     "job_issued": [("job_id", _is_text), ("batch", _is_text),
@@ -214,14 +219,56 @@ def _status(limits: dict[str, float], jobs: dict[str, dict], batch: str) -> dict
     return {"limit": limit, "committed": committed, "remaining": _r(limit - committed)}
 
 
-def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "", *,
-            lock_wait: float = LOCK_WAIT) -> dict:
-    """Record a credit approval for a batch. Refused while the ledger does not validate."""
-    _check_text("batch", batch)
+def _budget(events: list[dict]) -> dict | None:
+    """The latest budget line, or None."""
+    found = None
+    for ev in events:
+        if ev.get("type") == "budget":
+            found = ev
+    return found
+
+
+def _budget_status(events: list[dict]) -> dict | None:
+    """{"limit", "by", "approved" (the sum of all batch limits), "remaining"}, or None without a budget."""
+    budget = _budget(events)
+    if budget is None:
+        return None
+    approved = _r(sum(float(ev["limit_credits"]) for ev in events if ev.get("type") == "approval"))
+    limit = _r(budget["limit_credits"])
+    return {"limit": limit, "by": budget["by"], "approved": approved, "remaining": _r(limit - approved)}
+
+
+def set_budget(root: Path, limit_credits: float, by: str, note: str = "", *, lock_wait: float = LOCK_WAIT) -> dict:
+    """Record the project budget; it replaces any earlier one. Refused while the ledger does not validate."""
     _check_amount("limit_credits", limit_credits, positive=True)
     _check_text("by", by)
     with locked(root, lock_wait):
         _events(root)  # a damaged ledger is repaired before anything is appended to it
+        return _write(root, {"type": "budget", "time": _now(), "limit_credits": float(limit_credits),
+                             "by": by, "note": note})
+
+
+def budget_status(root: Path) -> dict | None:
+    """The project budget and what is left of it (see _budget_status). Fails closed on a damaged ledger."""
+    return _budget_status(_events(root))
+
+
+def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "", *,
+            lock_wait: float = LOCK_WAIT) -> dict:
+    """Record a credit approval for a batch. Refused while the ledger does not validate, and, while a
+    budget is set, when the sum of all batch limits would exceed it."""
+    _check_text("batch", batch)
+    _check_amount("limit_credits", limit_credits, positive=True)
+    _check_text("by", by)
+    with locked(root, lock_wait):
+        events = _events(root)  # a damaged ledger is repaired before anything is appended to it
+        budget = _budget_status(events)
+        if budget is not None and not (_r(budget["approved"] + limit_credits) <= budget["limit"]):
+            raise CineRecastError(
+                f"approving {_r(limit_credits)} credits for batch {batch!r} would bring the approved total to "
+                f"{_r(budget['approved'] + limit_credits)}, above the project budget of {budget['limit']} (set by "
+                f"{budget['by']}, {budget['remaining']} left); ask the user, then raise it with budget set or "
+                "approve less")
         return _write(root, {"type": "approval", "time": _now(), "batch": batch,
                              "limit_credits": float(limit_credits), "by": by, "note": note})
 
@@ -289,15 +336,27 @@ def job_states(root: Path) -> dict[str, str]:
 
 
 def audit(root: Path) -> dict:
+    """Check the ledger. Besides the batches and totals, "budget" is _budget_status (None without a
+    budget); an approval that brought the approved total above the budget in force at that moment
+    is a problem (a budget lowered later is not)."""
     events, problems = _load(root)
     limits, jobs = _state(events)
     seen_issued: set[str] = set()
     finished: set[str] = set()
     provider_ids: list[str] = []
+    budget_limit: float | None = None
+    approved = 0.0
     for ev in events:
         kind = ev.get("type")
         job_id = ev.get("job_id")
-        if kind == "job_issued":
+        if kind == "budget":
+            budget_limit = float(ev["limit_credits"])
+        elif kind == "approval":
+            approved = _r(approved + float(ev["limit_credits"]))
+            if budget_limit is not None and not (approved <= _r(budget_limit)):
+                problems.append(f"the approval of batch {ev['batch']!r} brought the approved total to {approved}, "
+                                f"above the project budget of {_r(budget_limit)} in force at that moment")
+        elif kind == "job_issued":
             if job_id in seen_issued:
                 problems.append(f"job {job_id} was issued more than once")
             seen_issued.add(job_id)
@@ -319,4 +378,4 @@ def audit(root: Path) -> dict:
             problems.append(f"batch {name!r} is over its approved limit: committed {st['committed']} > limit {st['limit']}")
     totals = {key: _r(sum(st[key] for st in batches.values())) for key in ("limit", "committed", "remaining")}
     return {"ok": not problems, "problems": problems, "batches": batches, "totals": totals,
-            "provider_ids": provider_ids}
+            "provider_ids": provider_ids, "budget": _budget_status(events)}

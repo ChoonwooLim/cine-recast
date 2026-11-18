@@ -206,6 +206,11 @@ def _cmd_assets_use(args: argparse.Namespace) -> int:
     return 0
 
 
+def _budget_line(budget: dict) -> str:
+    return (f"budget: limit {budget['limit']}, approved {budget['approved']}, remaining {budget['remaining']} "
+            f"(by {budget['by']})")
+
+
 def _cmd_approve(args: argparse.Namespace) -> int:
     root = Path(args.project)
     load_project(root)  # never start a ledger outside a project folder
@@ -213,6 +218,17 @@ def _cmd_approve(args: argparse.Namespace) -> int:
     status = ledger.batch_status(root, record["batch"])
     print(f"approved batch {record['batch']}: +{record['limit_credits']} credits, limit now {status['limit']}, "
           f"committed {status['committed']}, remaining {status['remaining']} (by {record['by']})")
+    budget = ledger.budget_status(root)
+    if budget is not None:
+        print(_budget_line(budget))
+    return 0
+
+
+def _cmd_budget_set(args: argparse.Namespace) -> int:
+    root = Path(args.project)
+    load_project(root)  # never start a ledger outside a project folder
+    ledger.set_budget(root, args.limit, args.by, args.note)
+    print(_budget_line(ledger.budget_status(root)))
     return 0
 
 
@@ -441,6 +457,16 @@ def _build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--by", required=True, help="who approved")
     approve.add_argument("--note", default="")
     approve.set_defaults(func=_cmd_approve)
+
+    budget = sub.add_parser("budget", help="the project budget in the ledger")
+    budget_sub = budget.add_subparsers(dest="budget_command")
+    budget_set = budget_sub.add_parser("set", help="record the project budget (replaces an earlier one); approve "
+                                                   "then refuses to bring the sum of all batch limits above it")
+    budget_set.add_argument("project", help="project folder")
+    budget_set.add_argument("--limit", required=True, type=float, help="credits the user approved for the project")
+    budget_set.add_argument("--by", required=True, help="who approved")
+    budget_set.add_argument("--note", default="")
+    budget_set.set_defaults(func=_cmd_budget_set)
 
     audit = sub.add_parser("audit", help="check the ledger; exit 2 when it is not ok")
     audit.add_argument("project", help="project folder")
