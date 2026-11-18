@@ -440,6 +440,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 ## 파일 형식
 
+`casting.json`과 `plan.json`은 고칠 키를 그 자리에서 고친다. 고친 뒤에도 올바른 UTF-8 JSON이기만 하면 어떤 도구로 고쳐도 되고, 줄 배치와 들여쓰기는 상관없다. 검사 명령이 파일을 다시 읽는다.
+
 ### casting.json
 
 에이전트가 쓴다. `casting.template.json`을 복사해 채워도 된다.
@@ -511,7 +513,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 New-Item -ItemType Directory -Force "$p\review" | Out-Null
 ```
 
-**맞추기 전의 테이크.** 첫 프레임부터 12프레임마다 한 장씩, 열여섯 칸까지 뽑는다. 첫 칸이 테이크의 첫 프레임이다. 올바른 숏인지, 첫 프레임이 원본의 첫 프레임과 같은 순간인지 본다. 테이크가 더 길면 간격 `12`를 늘린다.
+**맞추기 전의 테이크.** 첫 프레임부터 12프레임마다 한 장씩, 열여섯 칸까지 뽑는다. 첫 칸이 테이크의 첫 프레임이다. 올바른 숏인지, 첫 프레임이 원본의 첫 프레임과 같은 순간인지 본다. 테이크가 더 길면 간격 `12`를 늘린다. 테이크가 짧아 뽑히는 장수(프레임 수를 12로 나눠 올림)가 칸 수보다 적으면, `tile`의 줄 수를 그 장수를 열 수(8)로 나눠 올림한 값으로 줄인다(90프레임이면 8장이므로 `tile=8x1`). 그래야 이미지 아래쪽이 검게 비지 않는다.
 
 ```powershell
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\raw.mp4" -vf "select='not(mod(n\,12))',scale=320:-2,tile=8x2" -frames:v 1 -update 1 "$p\review\u01_t001_raw.png"
@@ -523,7 +525,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\raw.mp4" -vf "selec
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\shots\0003.mov" -vf "select='not(mod(n\,5))+eq(n\,35)',scale=320:-2,tile=9x1" -frames:v 1 -update 1 "$p\review\u01_t001_0003.png"
 ```
 
-**비교 영상.** 칸마다 왼쪽이 원본, 오른쪽이 결과다. 첫 프레임부터 12프레임마다 한 장씩, 열여섯 칸까지 뽑는다. 영상이 더 길면 간격 `12`를 늘리거나 `tile`의 줄 수를 늘린다.
+**비교 영상.** 칸마다 왼쪽이 원본, 오른쪽이 결과다. 첫 프레임부터 12프레임마다 한 장씩, 열여섯 칸까지 뽑는다. 영상이 더 길면 간격 `12`를 늘리거나 `tile`의 줄 수를 늘린다. 짧으면 `tile`의 줄 수를 뽑히는 장수(프레임 수를 12로 나눠 올림)를 열 수(2)로 나눠 올림한 값으로 줄인다(90프레임이면 8장이므로 `tile=2x4`).
 
 ```powershell
 ffmpeg -hide_banner -loglevel error -y -i "$p\out\compare.mp4" -vf "select='not(mod(n\,12))',scale=960:-2,tile=2x8" -frames:v 1 -update 1 "$p\review\compare.png"

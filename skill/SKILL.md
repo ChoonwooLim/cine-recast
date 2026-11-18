@@ -56,7 +56,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 유료 단계는 자료 이미지 생성(3단계)과 영상 생성(5단계)이다. 둘 다 같은 절차를 거친다. 승인은 묶음 단위로 받는다. 묶음은 한 번에 승인받는 작업들의 이름표이고 이름은 자유롭게 짓는다(`assets-1`, `draft-1`, `final-1`). 승인과 생성 호출은 사용자와 직접 대화하는 에이전트가 하고, 하위 에이전트에게 넘기지 않는다.
 
 1. `jobs list`(자료는 `assets list`)에서 묶음에 든 작업과, 작업마다 실제로 보낼 `params`를 읽는다.
-2. 작업마다 Higgsfield에 가격을 묻고 `jobs set-cost`(자료는 `assets set-cost`)로 기록한다. 가격을 묻는 호출은 아무것도 제출하지 않는 호출이어야 한다. 방법은 generation-jobs.md에 있다.
+2. 작업마다 Higgsfield에 가격을 묻고 `jobs set-cost`(자료는 `assets set-cost`)로 기록한다. 가격을 묻는 호출은 아무것도 제출하지 않는 호출이어야 한다. 견적도 실제로 올린 입력 파일의 media id만 받으므로 입력 파일을 먼저 올린다. 올리기 전에 보낼 파일을 사용자에게 한 줄로 알린다. 방법은 generation-jobs.md에 있다.
 3. `approve`를 실행하기 전에 사용자에게 표를 보여 준다. 작업마다 한 줄씩 적고 마지막에 합계를 적는다.
 
    | 작업 | 대상 | 모델 | 설정 | 견적(크레딧) |
@@ -80,13 +80,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - `& $cr --version`이 버전을 낸다.
 - `ffmpeg -version`이 실행된다. 도구가 ffmpeg와 ffprobe를 쓴다.
-- 자신의 도구 목록에 이름이 `models_explore`, `generate_video`, `generate_image`, `jobs_wait`로 끝나는 도구가 있다. 없으면 Higgsfield 연결이 없는 것이니 규칙 10에 따라 먼저 사용자에게 알린다.
+- 자신의 도구 목록에 이름이 `models_explore`, `generate_video`, `generate_image`, `jobs_wait`로 끝나는 도구가 있다. 없으면 Higgsfield 연결이 없는 것이니 규칙 10에 따라 먼저 사용자에게 알린다. 환경에 따라 도구가 불러오기 전까지 이름만 보이고 쓸 수 없는 경우가 있다. 그때는 환경의 방법으로 먼저 불러온다(Claude Code에서는 ToolSearch). 이름이 목록에 있으면 연결은 있는 것이다.
 
 그다음 여덟 단계를 차례로 한다. 이어서 하는 프로젝트라면 `& $cr audit $p`와 `jobs list`, `assets list`로 상태를 먼저 읽는다. 상태가 `issued`인 작업은 내보냈지만 결과가 기록되지 않은 것이므로 generation-jobs.md의 "끊긴 작업 이어가기"를 따른다. 어느 단계까지 왔는지는 프로젝트 폴더에 있는 파일로 알 수 있다(workflow.md의 폴더 구조).
 
 ### 1. 가져오기
 
-사용자에게서 참조 영상 파일(도구는 로컬 파일만 받는다), 누구를 누구로, 어디를 무엇으로 바꿀지, 교체 이미지(없으면 3단계에서 생성한다), 권리 세 항목의 답을 받는다.
+사용자에게서 참조 영상 파일(도구는 로컬 파일만 받는다), 누구를 누구로, 어디를 무엇으로 바꿀지, 교체 이미지(없으면 3단계에서 생성한다), 마감 해상도, 권리 세 항목의 답을 받는다. 마감 해상도는 완성본의 해상도다. 사용자가 바라는 값이 없으면, 모델이 제공하는 해상도(4단계에서 읽는다) 가운데 참조 영상의 높이보다 낮지 않은 가장 낮은 값을 제안하고, 해상도가 높을수록 비용이 오른다고 알린다.
 
 ```powershell
 & $cr init $p --reference "D:\footage\reference.mp4" --name my-project
