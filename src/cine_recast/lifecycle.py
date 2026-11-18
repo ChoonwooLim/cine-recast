@@ -1,4 +1,5 @@
-"""The life cycle shared by every paid job: video jobs in plan.json and asset jobs in assets.json.
+"""The life cycle shared by every paid job: video jobs in plan.json, asset jobs in assets.json and
+sound jobs in sounds.json.
 
 An entry moves planned -> quoted -> issued -> done or failed.
 
@@ -12,7 +13,7 @@ An entry moves planned -> quoted -> issued -> done or failed.
   returned files and undoes that storing when the ledger refuses; fail records the failure in the
   ledger first.
 
-`noun` ("job", "asset") names the entry in every message.
+`noun` ("job", "asset", "sound") names the entry in every message.
 """
 
 import hashlib
