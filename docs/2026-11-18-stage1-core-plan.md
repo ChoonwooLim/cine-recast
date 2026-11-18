@@ -10,7 +10,7 @@
 
 **Spec:** `docs/2026-11-18-cine-recast-design.md`
 
-**이 계획의 범위:** 설계서 7.7의 1단계 완료 기준을 충족한다. 다만 7.5의 측정 항목 중 인물 자세, 인물 동일성, 배경 일치와 7.3의 마스크·깊이는 다음 계획에서 넣는다. 어떤 모델과 라이브러리를 쓸지는 작업 14의 기준 클립 비교 결과로 정하기 때문이다. 이 계획에서는 등장 요소를 에이전트가 눈으로 식별한다.
+**이 계획의 범위:** 설계서 7.8의 1단계 완료 기준을 충족한다. 다만 7.5의 측정 항목 중 인물 자세, 인물 동일성, 배경 일치와 7.3의 마스크·깊이는 다음 계획에서 넣는다. 어떤 모델과 라이브러리를 쓸지는 작업 14의 기준 클립 비교 결과로 정하기 때문이다. 이 계획에서는 등장 요소를 에이전트가 눈으로 식별한다.
 
 ## Global Constraints
 
@@ -1224,3 +1224,164 @@ def test_unapproved_job_is_refused_by_the_cli(tmp_path, clip3):
 - [ ] **Step 8: 전체 재제작** — 정한 기본값으로 다섯 숏 전체의 계획을 세우고, 비용을 제시해 승인받고, 생성·맞춤·점수·선택·조립·비교·보고서까지 실행한다.
 - [ ] **Step 9: 완료 기준 확인** — Expected: `final.mp4`가 240프레임, 컷 위치가 `cuts.json`과 같음, 모든 숏에 점수가 있는 선택 테이크 존재, `compare.mp4`와 `report.md` 존재, `audit` 종료 코드 0이고 `provider_ids`가 Higgsfield 사용 내역과 일치, `& $py -m pytest tests -q` 전체 통과. 결과를 사용자에게 보여 주고 품질 판단을 받는다.
 - [ ] **Step 10: 커밋** — `docs: cine-recast proof run decisions` (기준값을 바꿨으면 `fix:` 커밋을 따로)
+
+---
+
+### Task 15: GitHub 소개 페이지
+
+**모델:** 세션 모델 (작업 13 다음에 직접 작성)
+
+**Files:**
+- Modify: `README.md`
+- Create: `README.en.md`, `docs/images/example-*.png`
+- 이미 있는 도해: `docs/images/banner.svg`, `concept.svg`, `workflow.svg`, `ledger.svg`
+
+한국어 `README.md`와 영어 `README.en.md`를 같은 구성으로 쓴다: 배너, 무엇을 하는가(개념도), 작업 흐름(도해), 설치, 빠른 시작(실제 명령), 실제 실행 화면(합성 테스트 영상으로 만든 컷 검수 이미지와 비교 영상 캡처), 일치도 점수 설명, 비용 승인 장부(도해), 교체 자료 생성, 프로젝트 폴더 구조, 에이전트에서 쓰는 법, 단계별 계획, 권리와 책임, 개발 규칙, 라이선스. 예시 이미지는 ffmpeg 합성 영상으로만 만든다. `tests/test_no_han.py`의 검사 대상에 `.svg`를 추가한다.
+
+---
+
+### Task 16: 교체 자료 생성
+
+**모델:** opus (실행 순서는 작업 12 다음, 작업 13 앞)
+
+**Files:**
+- Create: `src/cine_recast/assets.py`
+- Modify: `src/cine_recast/paths.py`, `src/cine_recast/casting.py`, `src/cine_recast/plan.py`(`check_models`), `src/cine_recast/cli.py`
+- Test: `tests/test_assets.py`, `tests/test_casting.py`, `tests/test_paths.py`
+
+교체할 인물·배경·크리처·소품의 자료가 없을 때 이미지 생성 모델로 만들어 교체표에 넣는다. 이미지 생성도 유료이므로 영상 작업과 같은 승인 장부를 거친다. 계획(`plan.json`)은 교체표 검사를 통과해야 만들 수 있으므로, 자료 생성 작업은 계획과 별도인 `assets.json`에 둔다.
+
+**Interfaces:**
+- Consumes: `casting.load`, `load_project`, `plan.check_models`, `ledger.issue/done/fail/job_states`, `plan.IssueRefused`, `textrules.is_english_prompt`, `analyze.load_video`
+- Produces:
+  - `ProjectPaths.assets_file` → `assets.json`, `ProjectPaths.asset_dir(element: str)` → `assets/<element>/`
+  - `assets.add(root: Path, *, element: str, prompt: str, model: str, batch: str, aspect_ratio: str | None = None, count: int = 1, refs: list[Path] = ()) -> dict`
+  - `assets.list_assets(root: Path) -> list[dict]` — 자료 작업마다 `id, element, kind, batch, state, est_credits, params, files`
+  - `assets.set_cost(root: Path, asset_id: str, credits: float) -> dict`
+  - `assets.issue_next(root: Path, batch: str) -> list[dict]`
+  - `assets.record_done(root: Path, asset_id: str, provider_id: str, credits: float, files: list[Path]) -> dict` — `{"asset", "files"}`
+  - `assets.record_fail(root: Path, asset_id: str, reason: str, credits: float = 0.0) -> dict`
+  - `assets.use(root: Path, element: str, image: str) -> None`
+  - `assets.generated_files(root: Path, element: str) -> list[str]` — 그 요소의 완료된 자료 파일(프로젝트 기준 상대 경로)
+  - CLI(첫 위치 인자는 `<project>`): `assets add --element <id> --prompt <text> --model <id> --batch <name> [--aspect-ratio <r>] [--count <n>] [--ref <file>]...`, `assets list`, `assets set-cost --asset <id> --credits <n>`, `assets next --batch <name>`, `assets done --asset <id> --provider-id <id> --credits <n> --file <path> [--file <path>]...`, `assets fail --asset <id> --reason <text> [--credits <n>]`, `assets use --element <id> --image <path>`. `assets list`와 `assets next`는 JSON을 stdout에 쓴다
+
+```json
+// models.json 의 이미지 모델 항목 (kind 가 "image" 이면 min_seconds, max_seconds, video_ref 는 필요 없고 resolutions 는 비어 있어도 된다)
+{"id": "image_model_x", "kind": "image", "aspect_ratios": ["1:1", "3:4", "16:9", "21:9"],
+ "resolutions": ["1k", "2k"], "image_refs": 4, "read_at": "2026-11-18"}
+// assets.json
+{"assets": [{"id": "a0001", "element": "hero", "kind": "person", "model": "image_model_x",
+             "params": {"aspect_ratio": "3:4", "resolution": "1k", "count": 2},
+             "prompt": "Full-body portrait of a young adult with short black hair ...",
+             "refs": [], "batch": "assets-1", "state": "planned",
+             "est_credits": null, "quote_digest": null, "files": []}]}
+// issue_next 의 반환 항목 하나
+{"job_id": "a0001", "element": "hero", "tool": "generate_image",
+ "params": {"model": "image_model_x", "prompt": "...", "aspect_ratio": "3:4", "resolution": "1k", "count": 2},
+ "medias": []}
+// record_done 뒤의 files
+["assets/hero/a0001_1.png", "assets/hero/a0001_2.png"]
+```
+
+규칙:
+
+- `add`: `element`는 `casting.json`의 요소여야 한다(교체표 검사 전체가 통과할 필요는 없다). `prompt`는 `is_english_prompt`를 통과. `model`은 `models.json`의 `kind: "image"` 모델. `count`는 1 이상 4 이하. `aspect_ratio`를 주지 않으면 요소 종류가 `background`일 때는 화면 영역 비율에 가장 가까운 것, 그 밖에는 모델 목록의 첫 번째. `params.resolution`은 모델 목록의 첫 번째이고 목록이 비어 있으면 넣지 않는다. `refs`는 존재하는 이미지 파일이고 개수가 `image_refs` 이하. 자료 번호는 `a0001`부터이며 `assets.json`과 장부에 있는 가장 큰 `a` 번호 다음을 쓴다(영상 작업의 `j` 번호와 같은 장부를 쓰되 서로 겹치지 않는다).
+- 상태는 `planned` → `quoted` → `issued` → `done` 또는 `failed`. `set_cost`는 견적과 함께 모델·`params`·`refs`의 요약값을 저장하고(프롬프트 제외), `issue_next`는 요약값이 달라진 자료를 거부한다. 발급은 반드시 `ledger.issue`를 거친다. 상태는 불러올 때마다 장부 기준으로 맞춘다.
+- `record_done`: 파일을 `assets/<element>/<id>_<순번><확장자>`로 복사한 뒤 `ledger.done`을 기록한다. 같은 이름이 있으면 덮어쓰지 않고 실패한다. 장부가 거부하면 복사한 파일을 지운다. 파일은 `.jpg` `.jpeg` `.png` `.webp`만 받는다.
+- `use`: `image`는 그 요소의 `generated_files` 중 하나여야 한다. `casting.json`의 그 요소 교체 항목을 `{"element", "images": [image], "note": "generated: <자료 번호>"}`로 쓰거나 바꾼다.
+- `casting.check` 변경: 인물 교체가 있을 때 `likeness_consent`가 `"yes"`이면 통과한다. `"not_applicable"`이면 모든 인물 교체의 모든 이미지가 그 요소의 `generated_files`에 있을 때만 통과한다. 그 밖에는 지금과 같이 `likeness_consent`가 들어간 문제를 낸다.
+
+- [ ] **Step 1: 실패하는 테스트 작성** — fixture `assets3`(= `analyzed3` + 요소만 있고 교체 항목이 없는 `casting.json` + 영상 모델과 이미지 모델이 하나씩 든 `models.json` + `reference_rights`와 `background_rights`는 `"yes"`, `likeness_consent`는 `"not_applicable"`)와 도우미 `png(path)`(1×1 PNG 생성)를 `conftest.py`에 추가.
+
+```python
+PROMPT = "Full-body portrait of a young adult with short black hair, neutral studio light."
+
+def test_add_creates_a_planned_asset(assets3):
+    a = add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1", count=2)
+    assert (a["id"], a["state"], a["kind"], a["params"]) == ("a0001", "planned", "person", {"aspect_ratio": "1:1", "resolution": "1k", "count": 2})
+    bg = add(assets3.root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="assets-1")
+    assert bg["id"] == "a0002" and bg["params"]["aspect_ratio"] == "16:9"       # nearest to the 384x216 picture
+
+@pytest.mark.parametrize("kwargs, fragment", [
+    (dict(element="ghost"), "element"),
+    (dict(prompt="\uc18c\ub144 \uc804\uc2e0"), "prompt"),
+    (dict(model="seedance_2_5"), "image"),
+    (dict(count=5), "count"),
+    (dict(aspect_ratio="9:99"), "aspect"),
+    (dict(refs=[Path("Z:/missing.png")]), "ref"),
+])
+def test_add_refusals(assets3, kwargs, fragment):
+    base = dict(element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    with pytest.raises(CineRecastError, match=fragment):
+        add(assets3.root, **{**base, **kwargs})
+
+def test_issue_goes_through_the_ledger(assets3):
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    assert issue_next(assets3.root, "assets-1") == []                           # nothing quoted yet
+    set_cost(assets3.root, "a0001", 6.0)
+    with pytest.raises(CineRecastError, match="approval"):
+        issue_next(assets3.root, "assets-1")
+    approve(assets3.root, "assets-1", 10.0, "owner")
+    job = issue_next(assets3.root, "assets-1")[0]
+    assert (job["job_id"], job["tool"], job["element"]) == ("a0001", "generate_image", "hero")
+    assert job["params"] == {"model": "image_model_x", "prompt": PROMPT, "aspect_ratio": "1:1", "resolution": "1k", "count": 1}
+    assert issue_next(assets3.root, "assets-1") == []                           # never issued twice
+
+def test_a_changed_asset_must_be_quoted_again(assets3):
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    set_cost(assets3.root, "a0001", 6.0); approve(assets3.root, "assets-1", 10.0, "owner")
+    data = read_json(assets3.assets_file); data["assets"][0]["params"]["count"] = 4; write_json(assets3.assets_file, data)
+    with pytest.raises(CineRecastError, match="set-cost"):
+        issue_next(assets3.root, "assets-1")
+
+def test_done_stores_files_and_use_fills_the_swap_table(assets3, tmp_path):
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1", count=2)
+    set_cost(assets3.root, "a0001", 6.0); approve(assets3.root, "assets-1", 10.0, "owner"); issue_next(assets3.root, "assets-1")
+    done = record_done(assets3.root, "a0001", "prov-1", 5.5, [png(tmp_path / "x.png"), png(tmp_path / "y.png")])
+    assert done == {"asset": "a0001", "files": ["assets/hero/a0001_1.png", "assets/hero/a0001_2.png"]}
+    assert generated_files(assets3.root, "hero") == done["files"] and audit(assets3.root)["ok"] is True
+    with pytest.raises(CineRecastError):
+        use(assets3.root, "hero", "assets/hero/a0009_1.png")                   # not a generated file
+    use(assets3.root, "hero", "assets/hero/a0001_2.png")
+    swap = read_json(assets3.casting_file)["swaps"][0]
+    assert swap == {"element": "hero", "images": ["assets/hero/a0001_2.png"], "note": "generated: a0001"}
+
+def test_generated_person_passes_without_a_likeness_consent(assets3, tmp_path):
+    generate_and_use(assets3.root, "hero", tmp_path)                            # helper: add..use for one element
+    assert check(assets3.root) == []                                            # likeness_consent is not_applicable
+    c = read_json(assets3.casting_file); c["swaps"][0]["images"] = [str(png(tmp_path / "photo.png"))]
+    write_json(assets3.casting_file, c)
+    assert any("likeness_consent" in p for p in check(assets3.root))            # an outside photo needs "yes"
+
+def test_refused_done_leaves_no_files(assets3, tmp_path):
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    with pytest.raises(CineRecastError):
+        record_done(assets3.root, "a0001", "prov-1", 1.0, [png(tmp_path / "x.png")])   # never issued
+    assert not assets3.asset_dir("hero").exists() or not any(assets3.asset_dir("hero").iterdir())
+
+def test_asset_ids_continue_above_the_ledger(assets3):
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    set_cost(assets3.root, "a0001", 6.0); approve(assets3.root, "assets-1", 10.0, "owner"); issue_next(assets3.root, "assets-1")
+    assets3.assets_file.unlink()
+    assert add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")["id"] == "a0002"
+
+def test_image_model_needs_no_duration_fields(assets3):
+    assert check_models(assets3.root) == []
+
+def test_cli_flow(assets3, tmp_path):
+    root = assets3.root
+    run_cli([["assets", "add", root, "--element", "sky_battle", "--prompt", "Sunset sky over red dunes.",
+              "--model", "image_model_x", "--batch", "assets-1"],
+             ["assets", "set-cost", root, "--asset", "a0001", "--credits", "4"],
+             ["approve", root, "--batch", "assets-1", "--limit", "5", "--by", "owner"],
+             ["assets", "next", root, "--batch", "assets-1"],
+             ["assets", "done", root, "--asset", "a0001", "--provider-id", "prov-1", "--credits", "4",
+              "--file", png(tmp_path / "bg.png")],
+             ["assets", "use", root, "--element", "sky_battle", "--image", "assets/sky_battle/a0001_1.png"],
+             ["assets", "list", root], ["cast", "check", root]])
+```
+
+- [ ] **Step 2: 실패 확인** — Run: `& $py -m pytest tests/test_assets.py -q` — Expected: FAIL (ImportError)
+- [ ] **Step 3: `assets.py` 구현, `paths.py`·`casting.py`·`plan.check_models`·CLI 수정** — `run_cli`, `generate_and_use`, `png`, `assets3`은 `conftest.py`에 둔다.
+- [ ] **Step 4: 통과 확인** — Run: `& $py -m pytest tests -q -W error` — Expected: 전체 통과
+- [ ] **Step 5: 커밋** — `feat: cine-recast generated swap assets`
