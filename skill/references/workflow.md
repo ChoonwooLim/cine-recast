@@ -27,13 +27,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
     shots/0001/sheet.json           analyze (숏 시트)
     shots/0001/stills/first.png, mid.png, last.png
     review/cut_0030.png, shot_0001.png      cuts review
-    units/u01/ref.mp4               plan build (단위의 참조 클립. 짧은 edit 단위는 끝에 마지막 프레임을 이어 붙인다)
+    units/u01/ref.mp4               plan build, plan unit (단위의 참조 클립. 짧은 edit 단위는 끝에 마지막 프레임을 이어 붙인다)
   casting.template.json             cast template
   casting.json                      에이전트가 쓴다. assets use가 swaps를 고친다
   models.json                       에이전트가 쓴다
   assets.json                       assets add, set-cost, next, done, fail
   assets/hero/a0001_1.png           assets done (생성된 교체 자료)
-  plan.json                         plan build. 프롬프트는 에이전트가 쓴다
+  plan.json                         plan build, plan unit. 프롬프트는 에이전트가 쓴다
   plans/plan-0001.json              plan build --replace가 보관한 이전 계획
   ledger.jsonl                      approve, jobs next, jobs done, jobs fail, assets next, assets done, assets fail
   ledger.lock                       장부를 쓰는 명령이 쓰는 동안 잡는 잠금 파일(지우지 않아도 된다)
@@ -254,6 +254,32 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 단위의 `duration`은 단위 길이를 초로 올림한 값이고 모델의 `min_seconds`보다 작지 않다. 그래서 테이크가 단위보다 길 수 있으며, `conform`이 필요한 프레임만 쓴다.
 - 거부: `cast check`나 `models check`를 통과하지 못한다. 영상 모델이 아니다. `edit`인데 모델이 참조 영상을 받지 않는다. 숏 하나가 상한보다 길다. 단위에 필요한 이미지가 모델의 `image_refs`보다 많다. `--per-shot`과 `--max-unit-seconds`를 함께 줬다. 계획이 있는데 `--replace`가 없다. 내보냈지만 끝나지 않은 작업이 있다(`jobs done`이나 `jobs fail`로 먼저 닫는다).
 
+### plan unit
+
+계획의 단위 하나를 지금 상태에 맞춘다. 실행할 때마다 단위의 입력을 지금의 교체표에서 다시 정하고, `--model`이나 `--method`를 주면 그 단위의 모델이나 방법을 바꾼다. 단위 id, 숏, 프레임, 프롬프트, `qc_skip`, 테이크, 고른 테이크는 그대로 남는다. 계획 전체를 다시 만들지 않으므로 다른 단위는 건드리지 않는다.
+
+```powershell
+& $cr plan unit $p --unit u01
+& $cr plan unit $p --unit u02 --model kling_video_edit
+& $cr plan unit $p --unit u02 --model seedance_2_5 --method regen
+```
+
+- 출력: `u02: model kling_video_edit, method edit, duration 4 s, inputs: analysis/units/u02/ref.mp4, assets/hero/a0001_2.png`. 패딩한 단위면 줄 끝에 `  padded +72 frames`가 붙는다.
+- 입력: `plan build`와 같은 규칙으로 정한다. 맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸이 오고, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로 온다. 한 요소의 `images`에 이미지가 여럿이면 적힌 순서대로 모두 들어간다. 이미지 입력 수가 모델의 `image_refs`보다 많으면 거부된다.
+- `--model`, `--method`: 생략하면 단위의 지금 값이다. 모델이나 방법이 바뀌면 `plan build`가 그 단위에 하는 일을 다시 한다. 길이(`duration`)는 단위 길이를 초로 올림한 값과 모델의 `min_seconds` 가운데 큰 값, 화면비는 모델의 비율 가운데 화면 영역에 가장 가까운 것, 단위의 기본 해상도는 이전과 같은 품질의 값(초안이면 첫 값, 본 생성이면 마지막 값), `pad_frames`는 새 모델의 `min_seconds`로 다시 계산한 값이다. 패딩이 바뀌면 단위의 참조 클립(`analysis/units/<단위>/ref.mp4`)을 다시 쓰고(패딩이 0으로 돌아가기도 한다), 바뀌지 않으면 참조 클립을 건드리지 않는다.
+- 작업: 모델이나 방법이 바뀌면 그 단위에서 아직 내보내지 않은 작업(`planned`, `quoted`)은 견적이 지워지고 `planned`로 돌아간다. 견적은 다른 모델의 가격이기 때문이다. 입력만 바뀐 경우에는 견적이 남지만 견적이 묶인 입력과 다르므로 `jobs next`가 그 작업을 거부한다. 어느 경우든 가격을 다시 물어 `jobs set-cost`를 한다. 끝난 작업(`done`, `failed`)은 기록한 것을 모두 그대로 두고, 그 뒤에 `jobs add`로 더한 작업은 단위의 새 모델로 나간다.
+- 쓰는 것: `plan.json`의 그 단위와 그 단위의 작업, 패딩이 바뀌었으면 `analysis/units/<단위>/ref.mp4`.
+- 거부: 현재 계획에 없는 단위다. 그 단위에 내보냈지만 끝나지 않은 작업이 있다(`jobs done`이나 `jobs fail`로 먼저 닫는다). `cast check`를 통과하지 못한다. 모델이 `models.json`에 없거나 영상 모델이 아니다. `edit`인데 모델이 참조 영상을 받지 않는다. 단위가 모델의 `max_seconds`보다 길다. 이미지 입력 수가 모델의 `image_refs`보다 많다. 거부되면 아무것도 바뀌지 않는다.
+
+교체 이미지는 프로젝트 도중에도 고칠 수 있고, 그때 이미 고른 테이크는 잃지 않는다.
+
+1. `casting.json`의 `swaps[].images`를 고치거나, `assets use`로 새로 생성한 이미지를 등록한다.
+2. `cast check`를 통과시킨다.
+3. `plan check`가 입력이 다르다고 알리는 단위마다 `plan unit`을 실행한다. 그 요소가 나오는 단위가 모두 해당한다.
+4. 고친 단위에 `jobs add`로 새 작업을 더하고 가격, 승인, 생성을 이어 간다.
+
+`plan build --replace`는 모든 단위에 새 id를 주므로 이미 만든 테이크를 현재 계획에서 쓸 수 없게 된다. 계획 전체를 다시 짤 때만 쓴다.
+
 ### plan check
 
 계획의 작업을 내보낼 수 있는지 검사한다.
@@ -265,8 +291,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 출력: `plan ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
 - 검사하는 것: 단위의 프롬프트가 비어 있지 않은 영어인지, 입력 파일이 있는지, 길이와 화면비와 해상도가 모델 범위 안인지, 견적 뒤에 `params`나 입력이 바뀌지 않았는지.
 - 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지, `pad_frames`가 있으면 0 이상의 정수인지(이 키가 없는 이전 계획은 통과한다). 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
-- 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan build --replace`로 계획을 다시 만들라는 문제가 나온다. 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
-- 모델: 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
+- 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan unit <project> --unit u01`로 그 단위를 지금 교체표에 맞추라는 문제가 나온다(같은 문제에 적힌 `plan build --replace`는 모든 단위를 새 id로 다시 만드는 방법이다). 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
+- 모델: 단위마다 그 단위의 모델로 검사한다. 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
 
 ### plan show
 
@@ -297,7 +323,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr jobs add $p --unit u01 --batch final-1 --quality final
 ```
 
-- `--quality draft`는 `models.json`에 적힌 그 모델의 첫 해상도, `final`은 마지막 해상도로 나간다.
+- `--quality draft`는 `models.json`에 적힌 그 모델의 첫 해상도, `final`은 마지막 해상도로 나간다. 모델은 작업을 더한 단위의 지금 모델이다(`plan unit`으로 바꿨으면 바꾼 모델).
 - 출력: 새 작업 id(`j0002`). 한 번 쓴 id는 다시 쓰이지 않는다.
 
 ### jobs set-cost
@@ -469,6 +495,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr report $p
 ```
 
+- 숏별 결과의 모델은 고른 테이크를 실제로 만든 작업이 보낸 모델이다(`plan unit`으로 단위의 모델을 바꾼 뒤에도 그 테이크의 모델이 나온다). 고른 테이크가 없거나 작업을 알 수 없으면 단위의 지금 모델이다.
 - 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 비용, 열린 항목(고른 테이크가 없는 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏). 마지막 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
 - 권리 확인: `yes`가 아닌 답에는 "확인 필요"가 붙는다. 다만 `likeness_consent`의 `not_applicable`은 도구가 확인할 수 있으면(교체하는 인물이 없거나, 인물 교체 이미지가 모두 참조 이미지 없이 생성한 파일) 붙지 않고 도구가 확인했다고 적힌다.
 - 비용: 묶음마다 한도, 사용, 잔액과 모든 묶음의 합계 줄, 그 아래 끝난 작업의 Higgsfield 작업 id 목록.
@@ -507,7 +534,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `elements[].shots` | 그 요소가 보이는 숏 번호(정수). 비어 있으면 안 된다 |
 | `elements[].look` | 원본에서 보이는 모습. 영어 |
 | `swaps[].element` | 교체할 요소의 id. 요소 하나에 항목 하나 |
-| `swaps[].images` | 교체 이미지. 한 장 이상이고, 상대 경로는 프로젝트 폴더 기준이다 |
+| `swaps[].images` | 교체 이미지. 한 장 이상이고, 상대 경로는 프로젝트 폴더 기준이다. 여러 장이면 적힌 순서대로 모두 입력이 된다 |
 | `swaps[].note` | 메모. 생략해도 된다 |
 
 교체표에 없는 요소(위의 `dragon`)는 원본과 같게 재현한다. 어떤 단위의 숏에 나오는 요소의 교체 이미지는 모두 그 단위의 입력으로 들어가며, 순서는 요소 목록의 순서다.
@@ -522,7 +549,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적고, 단위의 모든 숏에 적용된다. 배경을 교체한 숏의 `color`는 도구가 자동으로 빼므로 적지 않아도 된다. 그 밖에 이유를 댈 수 있는 경우에 쓰고, 넣기 전에 사용자에게 알린다 |
 | `units[].params.duration` | 모델이 정해진 길이만 받을 때. 단위 길이보다 짧지 않은 허용 값으로 고친다. 견적 전에 고치고, 견적 뒤에 고쳤으면 다시 견적을 기록한다 |
 
-작업 목록, `state`, `est_credits`, `inputs`, `selected_take`, `pad_frames`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
+작업 목록, `state`, `est_credits`, `inputs`, `selected_take`, `pad_frames`, `model`, `method`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 바뀐 단위마다 `plan unit`을 한다. 단위의 모델이나 방법은 `plan unit --model`, `--method`로 바꾼다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
 
 ### 점수 읽기
 

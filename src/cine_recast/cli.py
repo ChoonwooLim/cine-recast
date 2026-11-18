@@ -101,6 +101,14 @@ def _cmd_plan_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan_unit(args: argparse.Namespace) -> int:
+    unit = plan.refresh_unit(Path(args.project), args.unit, model=args.model, method=args.method)
+    padded = f"  padded +{unit['pad_frames']} frames" if unit.get("pad_frames") else ""
+    print(f"{unit['id']}: model {unit['model']}, method {unit['method']}, duration {unit['params']['duration']} s, "
+          f"inputs: {', '.join(entry['path'] for entry in unit['inputs'])}{padded}")
+    return 0
+
+
 def _cmd_plan_check(args: argparse.Namespace) -> int:
     return _report_problems(plan.check(Path(args.project)), "plan ok")
 
@@ -330,6 +338,14 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="rebuild an existing plan: archive it under plans/ and give the new units and "
                                  "jobs ids never used before (refused while a job is issued and not finished)")
     plan_build.set_defaults(func=_cmd_plan_build)
+    plan_unit = plan_sub.add_parser("unit", help="bring one unit up to date: its inputs from the swap table as it is "
+                                                 "now, and optionally another model or method (refused while one of "
+                                                 "its jobs is issued and not finished)")
+    plan_unit.add_argument("project", help="project folder")
+    plan_unit.add_argument("--unit", required=True)
+    plan_unit.add_argument("--model", default=None, help="video model id from models.json (default: the unit's)")
+    plan_unit.add_argument("--method", choices=plan.METHODS, default=None, help="default: the unit's")
+    plan_unit.set_defaults(func=_cmd_plan_unit)
     plan_check = plan_sub.add_parser("check", help="check prompts, input files and model limits")
     plan_check.add_argument("project", help="project folder")
     plan_check.set_defaults(func=_cmd_plan_check)

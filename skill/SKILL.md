@@ -175,6 +175,14 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
    `edit`는 원본 숏을 편집 모델에 넣어 지정한 요소만 바꾸는 방법이고, `regen`은 숏의 첫 스틸과 교체 이미지를 참조로 처음부터 생성하는 방법이다. 단위는 생성 호출 한 번으로 만드는 연속한 숏 묶음이다. 실제 생성에서 모델은 숏이 여럿인 단위 안의 숏을 다른 화면으로 바꾸거나, 빼먹고 이웃 숏을 늘리기도 했다. 숏 하나인 단위에는 섞이거나 늘어날 이웃 숏이 없다. 숏 여럿을 한 단위로 묶는 것(`--per-shot` 없이 실행)은 고른 모델이 단위 안의 숏을 따로 지킨다는 것을 시험으로 확인한 경우에만 한다.
 
    출력은 `u01: shots [1]  frames 0-30  duration 4 s  padded +66 frames` 같은 단위별 줄과 `planned jobs: j0001, j0002, j0003 (batch draft-1)`이다. 모델은 원본 영상의 최소 길이(`min_seconds`)를 정해 둔다. `edit` 단위가 그보다 짧으면 도구가 단위의 참조 클립 뒤에 마지막 프레임을 이어 붙여 최소 길이를 채우고, 붙인 프레임 수를 줄 끝(`padded +66 frames`)과 단위의 `pad_frames`에 적는다. 붙인 프레임은 완성본에 들어가지 않는다. 그런 단위의 테이크는 끝에 멈춘 화면이 이어지기 쉬우므로, 6단계에서 숏이 끝나는 프레임을 경계로 정한다.
+
+   모델은 숏마다 고를 수 있다. 계획은 한 모델로 만들고, 다른 모델이 맞는 숏의 단위만 `plan unit`으로 옮긴다. 한 모델이 어떤 숏을 거부하거나(서비스의 안전 필터나 권리 필터) 그 숏을 잘 만들지 못할 때도 그 단위만 옮긴다. 계획 전체를 다시 만들지 않으므로 다른 단위의 테이크는 그대로 남는다.
+
+   ```powershell
+   & $cr plan unit $p --unit u02 --model kling_video_edit
+   ```
+
+   출력은 `u02: model kling_video_edit, method edit, duration 4 s, inputs: analysis/units/u02/ref.mp4, assets/hero/a0001_2.png  padded +72 frames` 같은 한 줄이다. `--method`로 방법도 바꿀 수 있다. 모델이나 방법이 바뀌면 도구가 길이, 화면비, 패딩을 그 모델에 맞춰 다시 정하고, 그 단위에서 아직 내보내지 않은 작업의 견적을 지운다. 그 작업은 가격을 다시 물어 `jobs set-cost`를 한다.
 4. `plan.json`의 단위마다 `prompt`를 쓰고(아래 "프롬프트 작성") 검사한다. `plan ok`가 나와야 한다.
 
    ```powershell
@@ -250,6 +258,12 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
   ```powershell
   & $cr jobs add $p --unit u01 --batch draft-1 --quality draft
+  ```
+- 모델이 숏을 거부하거나 같은 원인으로 거듭 실패하면 `plan unit`으로 그 단위를 다른 모델로 옮기고(4단계) `jobs add`로 새 작업을 만든다. 서비스의 안전 필터나 권리 필터가 숏을 거부하면 입력을 위장해 통과시키지 않는다. 로고나 얼굴을 잘라 내 필터를 피하는 것, 내용을 속이는 프롬프트도 위장이다. 할 수 있는 것은 그 자료를 받아 주는 다른 모델로 옮기는 것과, 지금 쓸 수 있는 서비스로는 그 숏을 만들 수 없다고 사용자에게 알리는 것 둘뿐이다.
+- 교체 이미지는 프로젝트 도중에도 고칠 수 있고, 이미 고른 테이크는 잃지 않는다. `casting.json`의 `swaps[].images`를 고치거나 `assets use`로 새 이미지를 등록하고, `cast check`를 통과시킨 뒤, 그 요소가 나오는 단위마다 `plan unit`을 실행한다(`plan check`가 바뀐 단위를 알려 준다). 그다음 그 단위에 `jobs add`로 새 작업을 더한다. `plan build --replace`는 모든 단위에 새 id를 주어 이미 만든 테이크를 쓸 수 없게 하므로 계획 전체를 다시 짤 때만 쓴다.
+
+  ```powershell
+  & $cr plan unit $p --unit u01
   ```
 - 초안이 확정되면 본 생성 작업을 새 묶음으로 더하고, 견적과 승인을 거쳐 5-7단계를 다시 한다. `draft`는 `models.json`에 적은 그 모델의 가장 낮은 해상도, `final`은 가장 높은 해상도로 나간다. 본 생성도 새로 생성하는 것이어서 초안과 다르게 나올 수 있으니 처음부터 다시 검수한다.
 
@@ -349,7 +363,7 @@ Keep this shot exactly as it is in the source video: the same people, place, cam
 | `color` | 배경을 교체한 숏의 `color`는 이미 판정에서 빠져 있으므로(`skipped`) 여기 오는 것은 배경 교체가 없는 숏이다. 교체한 인물(의상 등) 때문에 화면의 색이 달라진 것인가 | 교체의 당연한 결과이고 스틸이 의도대로면 사용자에게 알리고 그 단위의 `qc_skip`에 `"color"`를 넣은 뒤 `qc`를 다시 한다(`qc_skip`은 단위의 모든 숏에 적용된다). 교체와 무관하게 색이 변했으면 원본의 색과 빛을 유지하라고 적어 다시 생성한다 |
 | `flicker_ratio` | 프레임 사이에 밝기나 질감이 출렁이는가 | 다시 생성한다 |
 
-같은 원인으로 거듭 실패하면 같은 설정을 되풀이하지 말고, 방법(`edit`와 `regen`)이나 모델을 바꿀지 사용자와 상의한다. 합격 기준(`project.json`의 `thresholds`)은 테이크를 통과시키려고 고치지 않는다. 기준을 바꾸는 것은 사용자의 결정이다.
+같은 원인으로 거듭 실패하면 같은 설정을 되풀이하지 말고, 방법(`edit`와 `regen`)이나 모델을 바꿀지 사용자와 상의한다. 바꾸기로 하면 `plan unit`으로 그 단위만 바꾼다. 합격 기준(`project.json`의 `thresholds`)은 테이크를 통과시키려고 고치지 않는다. 기준을 바꾸는 것은 사용자의 결정이다.
 
 ## 멈추고 사용자에게 알릴 때
 
@@ -359,6 +373,7 @@ Keep this shot exactly as it is in the source video: the same people, place, cam
 - 명령이 `ledger line N is invalid`로 멈춘다. 장부가 손상된 것이다. 생성을 멈추고 `audit`으로 문제 줄을 확인해 사용자에게 보고한다. `ledger.jsonl`은 직접 고치지 않는다.
 - 생성 호출이 시간 초과로 끊겨 결과를 모른다. 다시 제출하지 말고 먼저 조회한다(generation-jobs.md).
 - 권리 답 때문에 `cast check`나 `assets` 명령이 거부한다.
+- 서비스의 안전 필터나 권리 필터가 숏을 거부했고, 그 자료를 받아 주는 다른 모델이 없다.
 - `audit`의 내용과 Higgsfield 사용 내역이 맞지 않는다. 숨기지 않고 그대로 보고한다.
 
 ## 참고 문서

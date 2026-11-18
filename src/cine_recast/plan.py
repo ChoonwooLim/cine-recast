@@ -445,6 +445,107 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
     return data
 
 
+def _quality_of(spec: dict | None, resolution) -> str:
+    """The quality a unit's stored resolution stands for under its model: final for the model's last
+    of several resolutions, else draft."""
+    if spec is None or spec.get("kind") != "video" or len(spec["resolutions"]) < 2:
+        return "draft"
+    return "final" if resolution == spec["resolutions"][-1] else "draft"
+
+
+def refresh_unit(root: Path, unit_id: str, *, model: str | None = None, method: str | None = None) -> dict:
+    """Bring one unit of the current plan up to date and return it.
+
+    Every call derives the unit's inputs again from the swap table as it is now (_unit_inputs, as
+    plan build does) and checks them against the model's image_refs. With model or method (either
+    differing from the unit's), it does for this unit what plan build does for every unit: the model
+    must be a video model that takes the unit's length (max_seconds) and, for edit, a reference video;
+    duration, aspect ratio, the unit's default resolution (of the same quality as before) and
+    pad_frames are computed again, and the unit's jobs that are not issued yet lose their quote (the
+    price belongs to the other model). The reference clip is written again only when pad_frames
+    changes. Without a change of model or method, a job quoted with the old inputs keeps its quote
+    and the quote digest makes jobs next refuse it until it is quoted again.
+
+    The unit keeps its id, shots, frames, prompt, qc_skip, takes, selected take and confirmation; jobs
+    that are done or failed keep everything they recorded. Refused, with nothing written: an unknown
+    unit, a job of the unit issued and not finished, a swap table that does not pass cast check, a
+    model or method the unit cannot use.
+    """
+    root = Path(root)
+    pp = ProjectPaths(root)
+    project = load_project(root)
+    data = load(root)
+    item = _checked(_find_unit(data, unit_id), f"unit {unit_id}")
+    old_pad = pad_frames(item)
+    open_jobs = [str(j.get("id")) for j in data["jobs"]
+                 if isinstance(j, dict) and j.get("unit") == unit_id and j.get("state") == "issued"]
+    if open_jobs:
+        raise CineRecastError(f"unit {unit_id} has jobs issued and not finished: {', '.join(open_jobs)}; record them "
+                              "with jobs done or jobs fail first")
+    new_method = item.get("method") if method is None else method
+    if new_method not in METHODS:
+        raise CineRecastError(f"unknown method {new_method!r}; expected one of {', '.join(METHODS)}")
+    problems = casting.check(root)
+    if problems:
+        raise CineRecastError("casting is not ready: " + "; ".join(problems))
+    models = valid_models(root)
+    new_model = item.get("model") if model is None else model
+    spec = models.get(new_model) if isinstance(new_model, str) else None
+    if spec is None:
+        raise CineRecastError(f"model {new_model!r} is not in models.json")
+    if spec["kind"] != "video":
+        raise CineRecastError(f"model {new_model!r} has kind {spec['kind']!r}; units need a video model")
+    if new_method == "edit" and not spec["video_ref"]:
+        raise CineRecastError(f"model {new_model!r} does not take a reference video (video_ref is false); "
+                              "method 'edit' needs one, use method 'regen'")
+    info, box = load_video(root)
+    frame_seconds = Fraction(info.fps_den, info.fps_num)
+    frames = item.get("end") - item.get("start") if all(
+        isinstance(item.get(k), int) and not isinstance(item.get(k), bool) for k in ("start", "end")) else 0
+    if frames <= 0:
+        raise CineRecastError(f"plan.json: unit {unit_id} needs whole start and end frames; repair it, plan check "
+                              "lists the problems")
+    if frames * frame_seconds > _exact(spec["max_seconds"]):
+        raise CineRecastError(f"unit {unit_id} (shots {item['shots']}) is {float(frames * frame_seconds):.3f} s long, "
+                              f"longer than model {new_model!r} takes (max_seconds {spec['max_seconds']})")
+    inputs = _unit_inputs(root, unit_id, new_method, item["shots"])
+    images = sum(1 for entry in inputs if entry["role"] == "image")
+    if images > spec["image_refs"]:
+        raise CineRecastError(f"unit {unit_id} (shots {item['shots']}) needs {images} input images but model "
+                              f"{new_model!r} takes at most {spec['image_refs']} (image_refs)")
+    changed = new_model != item.get("model") or new_method != item.get("method")
+    params, pad = item.get("params"), old_pad
+    if changed:
+        min_frames = math.ceil(_exact(spec["min_seconds"]) / frame_seconds) if new_method == "edit" else 0
+        pad = max(0, min_frames - frames)
+        old_spec = models.get(item.get("model")) if isinstance(item.get("model"), str) else None
+        old_resolution = item["params"].get("resolution") if isinstance(item.get("params"), dict) else None
+        params = {"duration": _whole(max(spec["min_seconds"], math.ceil(frames * frame_seconds))),
+                  "aspect_ratio": closest_aspect(spec, box.aspect),
+                  "resolution": _resolution(spec, _quality_of(old_spec, old_resolution))}
+    clip = pp.unit_dir(unit_id) / "ref.mp4"
+    staged = None
+    if pad != old_pad or not clip.is_file():
+        staged = clip.with_name("ref.new.mp4")
+        cut_frames(root / project["reference"], item["start"], item["end"], staged, crop=box.as_crop(), hold=pad)
+    try:
+        item.update(model=new_model, method=new_method, params=params, inputs=inputs)
+        if changed or "pad_frames" in item:
+            item["pad_frames"] = pad
+        if changed:
+            for job in data["jobs"]:
+                if isinstance(job, dict) and job.get("unit") == unit_id and job.get("state") in UNISSUED:
+                    job.update(state="planned", est_credits=None, quote_digest=None)
+                    job.pop("sent_params", None)
+        _save(root, data)
+        if staged is not None:
+            staged.replace(clip)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+    return item
+
+
 # --- payloads and quotes -------------------------------------------------------------------
 
 def _payload(root: Path, data: dict, models: dict[str, dict], job: dict) -> dict:
@@ -548,8 +649,9 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
                 expected = _unit_inputs(root, item["id"], method, shots)
                 if inputs != expected:
                     problems.append(f"{label}: its inputs are not the inputs the swap table and method {method!r} "
-                                    f"give now ({', '.join(e['path'] for e in expected)}); rebuild the plan "
-                                    "with plan build --replace")
+                                    f"give now ({', '.join(e['path'] for e in expected)}); bring this unit up to "
+                                    f"date with plan unit <project> --unit {item['id']} (plan build --replace "
+                                    "rebuilds every unit, with new unit ids)")
         if not models:
             continue  # models.json problems are already listed
         spec = models.get(item.get("model"))

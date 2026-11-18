@@ -627,10 +627,10 @@ def test_inputs_added_by_hand_are_refused(cast3, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("mutate, fragment", [
-    (lambda u: u.update(method="regen"), "plan build --replace"),          # the lead input follows the method
-    (lambda u: u["inputs"].reverse(), "plan build --replace"),              # order matters
-    (lambda u: u["inputs"][1].update(element="sky_battle"), "plan build --replace"),
-    (lambda u: u["inputs"].pop(), "plan build --replace"),
+    (lambda u: u.update(method="regen"), "plan unit <project> --unit u01"),          # the lead input follows the method
+    (lambda u: u["inputs"].reverse(), "plan unit <project> --unit u01"),              # order matters
+    (lambda u: u["inputs"][1].update(element="sky_battle"), "plan unit <project> --unit u01"),
+    (lambda u: u["inputs"].pop(), "plan unit <project> --unit u01"),
     (lambda u: u.update(method="paint"), "method"),
 ])
 def test_stored_inputs_must_match_the_derived_inputs(planned3, mutate, fragment):
@@ -981,3 +981,198 @@ def test_cli_plan_build_per_shot(cast3, capsys):
     write_models(cast3.root, min_seconds=1)
     assert main([*args, "--replace"]) == 0
     assert capsys.readouterr().out.splitlines()[0] == "u04: shots [1, 2, 3]  frames 0-90  duration 4 s"
+
+
+# --- task 20 (K): model and method per unit, and the inputs refreshed from the swap table ---
+
+OTHER_MODEL = {"id": "other_video", "kind": "video", "min_seconds": 1, "max_seconds": 10,
+               "aspect_ratios": ["16:9"], "resolutions": ["720p", "1080p"], "video_ref": True, "image_refs": 3,
+               "read_at": "2026-11-18"}
+LONG_MIN_MODEL = {**OTHER_MODEL, "id": "long_min", "min_seconds": 5, "resolutions": ["1080p"]}
+NO_REF_MODEL = {**OTHER_MODEL, "id": "no_ref", "video_ref": False}
+ONE_IMAGE_MODEL = {**OTHER_MODEL, "id": "one_image", "image_refs": 1}
+SHORT_MODEL = {**OTHER_MODEL, "id": "short_max", "max_seconds": 1}
+
+
+def _per_shot(cast3):
+    from conftest import EXAMPLE_MODEL, IMAGE_MODEL
+
+    write_json(cast3.models_file, {"models": [EXAMPLE_MODEL, OTHER_MODEL, LONG_MIN_MODEL, NO_REF_MODEL,
+                                              ONE_IMAGE_MODEL, SHORT_MODEL, IMAGE_MODEL]})
+    build(cast3.root, model="seedance_2_5", method="edit", batch="b", per_shot=True)
+    for unit_id in ("u01", "u02", "u03"):
+        set_prompt(cast3.root, unit_id, GOOD_PROMPT)
+    return cast3.root
+
+
+def _line(unit):
+    padded = f"  padded +{unit['pad_frames']} frames" if unit["pad_frames"] else ""
+    return (f"{unit['id']}: model {unit['model']}, method {unit['method']}, duration {unit['params']['duration']} s, "
+            f"inputs: {', '.join(i['path'] for i in unit['inputs'])}{padded}")
+
+
+def test_plan_unit_changes_the_model_and_the_padding(cast3, capsys):
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)                                            # shot 1: 30 frames, padded to 96 (4 s)
+    assert load(root)["units"][0]["pad_frames"] == 66 and probe(cast3.unit_dir("u01") / "ref.mp4").frames == 96
+    unit = refresh_unit(root, "u01", model="other_video")             # min 1 s: no padding needed
+    assert (unit["id"], unit["model"], unit["method"], unit["pad_frames"]) == ("u01", "other_video", "edit", 0)
+    assert unit["params"] == {"duration": 2, "aspect_ratio": "16:9", "resolution": "720p"}
+    assert probe(cast3.unit_dir("u01") / "ref.mp4").frames == 30
+    assert (unit["prompt"], unit["shots"], unit["start"], unit["end"]) == (GOOD_PROMPT, [1], 0, 30)
+    capsys.readouterr()
+    assert main(["plan", "unit", str(root), "--unit", "u01", "--model", "long_min"]) == 0
+    unit = load(root)["units"][0]
+    assert capsys.readouterr().out.strip() == _line(unit)
+    assert _line(unit).startswith("u01: model long_min, method edit, duration 5 s, inputs: analysis/units/u01/ref.mp4, ")
+    assert _line(unit).endswith("  padded +90 frames") and probe(cast3.unit_dir("u01") / "ref.mp4").frames == 120
+    assert [u["model"] for u in load(root)["units"]] == ["long_min", "seedance_2_5", "seedance_2_5"]
+    assert check(root) == []                                           # every unit against its own model
+
+
+def test_plan_unit_changes_the_method_and_derives_the_inputs(cast3):
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    before = load(root)["units"][0]["inputs"]
+    unit = refresh_unit(root, "u01", model="no_ref", method="regen")
+    assert unit["inputs"][0] == {"role": "image", "path": "analysis/shots/0001/stills/first.png"}
+    assert unit["inputs"][1:] == before[1:] and unit["pad_frames"] == 0 and unit["method"] == "regen"
+    with pytest.raises(CineRecastError, match="video_ref"):
+        refresh_unit(root, "u01", method="edit")                       # no_ref takes no reference video
+    unit = refresh_unit(root, "u01", model="seedance_2_5")            # the method stays regen
+    assert (unit["method"], unit["inputs"][0]["role"], unit["pad_frames"]) == ("regen", "image", 0)
+    unit = refresh_unit(root, "u01", method="edit")
+    assert (unit["inputs"], unit["pad_frames"]) == (before, 66) and check(root) == []
+
+
+def test_plan_unit_on_a_new_model_clears_the_quotes_of_unissued_jobs_only(cast3, result_clip):
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    set_cost(root, "j0001", 40.0); approve(root, "b", 40.0, "owner"); issue_next(root, "b")
+    record_done(root, "j0001", "prov-1", 38.0, result_clip)
+    retry = add_job(root, "u01", "b", "final")["id"]
+    set_cost(root, retry, 60.0)
+    set_cost(root, "j0002", 40.0)                                      # u02's job keeps its quote
+    refresh_unit(root, "u01", model="other_video")
+    jobs = {j["id"]: j for j in load(root)["jobs"]}
+    assert (jobs[retry]["state"], jobs[retry]["est_credits"], jobs[retry].get("quote_digest")) == ("planned", None, None)
+    assert (jobs["j0002"]["state"], jobs["j0002"]["est_credits"]) == ("quoted", 40.0)
+    done = jobs["j0001"]
+    assert (done["state"], done["est_credits"], done["sent_params"]["model"]) == ("done", 40.0, "seedance_2_5")
+    assert list_takes(root, "u01") == ["t001"]
+    listed = {j["id"]: j for j in list_jobs(root)}
+    assert listed[retry]["params"]["model"] == "other_video" and listed[retry]["params"]["resolution"] == "1080p"
+    assert listed["j0001"]["params"]["model"] == "seedance_2_5"        # what was really sent
+    added = add_job(root, "u01", "b", "draft")["id"]                  # a job added after the change
+    assert {j["id"]: j for j in list_jobs(root)}[added]["params"]["model"] == "other_video"
+
+
+def test_plan_unit_without_a_model_refreshes_the_inputs_from_the_swap_table(cast3, tmp_path, capsys):
+    from conftest import png
+
+    root = _per_shot(cast3)
+    set_cost(root, "j0001", 40.0); approve(root, "b", 100.0, "owner")
+    clip_before = (cast3.unit_dir("u01") / "ref.mp4").read_bytes()
+    unit_before = load(root)["units"][0]
+    better = png(tmp_path / "refs" / "person_sheet.png")              # an improved reference image
+    casting = read_json(cast3.casting_file)
+    casting["swaps"][0]["images"] = [better.as_posix()]
+    write_json(cast3.casting_file, casting)
+    problems = check(root)
+    assert any("u01" in p and "plan unit <project> --unit u01" in p and "plan build --replace" in p for p in problems)
+    capsys.readouterr()
+    assert main(["plan", "unit", str(root), "--unit", "u01"]) == 0
+    unit = load(root)["units"][0]
+    assert capsys.readouterr().out.strip() == _line(unit)
+    assert unit["inputs"][1] == {"role": "image", "path": better.as_posix(), "element": "hero"}
+    assert {k: v for k, v in unit.items() if k != "inputs"} == {k: v for k, v in unit_before.items() if k != "inputs"}
+    assert (cast3.unit_dir("u01") / "ref.mp4").read_bytes() == clip_before          # padding unchanged
+    assert [p.split(":")[0] for p in check(root)] == ["unit u03", "job j0001"]      # the hero is in shot 3 too
+    assert main(["plan", "unit", str(root), "--unit", "u03"]) == 0
+    assert check(root) == ["job j0001: its parameters or inputs changed since it was quoted; quote it again with "
+                           "jobs set-cost"]                            # only the old quote is left to renew
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 2      # quoted with the old inputs
+    assert "jobs set-cost" in capsys.readouterr().err
+    assert main(["jobs", "set-cost", str(root), "--job", "j0001", "--credits", "40"]) == 0
+    capsys.readouterr()
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["medias"][1]["path"] == str(better.resolve())
+
+
+def test_a_two_image_swap_gives_two_image_inputs_in_order(cast3, tmp_path):
+    from conftest import png
+
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    front, side = png(tmp_path / "refs" / "front.png"), png(tmp_path / "refs" / "side.png")
+    casting = read_json(cast3.casting_file)
+    casting["swaps"][0]["images"] = [front.as_posix(), side.as_posix()]
+    write_json(cast3.casting_file, casting)
+    unit = refresh_unit(root, "u01")
+    assert [(i["role"], i["path"], i.get("element")) for i in unit["inputs"]] == [
+        ("video", "analysis/units/u01/ref.mp4", None), ("image", front.as_posix(), "hero"),
+        ("image", side.as_posix(), "hero"), ("image", casting["swaps"][1]["images"][0], "sky_battle")]
+    with pytest.raises(CineRecastError, match="3 input images.*image_refs"):
+        refresh_unit(root, "u01", model="one_image")
+    assert load(root)["units"][0]["model"] == "seedance_2_5"
+    write_models(root, image_refs=2)
+    with pytest.raises(CineRecastError, match="image_refs"):
+        refresh_unit(root, "u01")                                      # the refresh checks the count too
+    with pytest.raises(CineRecastError, match="image_refs"):
+        build(root, model="seedance_2_5", method="edit", batch="b", per_shot=True, replace=True)
+
+
+@pytest.mark.parametrize("setup, kwargs, fragment", [
+    (lambda r: None, dict(unit_id="u09", model="other_video"), "unknown unit"),
+    (lambda r: None, dict(unit_id="u01", model="image_model_x"), "video model"),
+    (lambda r: None, dict(unit_id="u01", model="missing"), "not in models.json"),
+    (lambda r: None, dict(unit_id="u01", model="other_video", method="remake"), "method"),
+    (lambda r: None, dict(unit_id="u01", model="short_max"), "max_seconds"),       # shot 1 lasts 1.25 s
+    (lambda r: (set_cost(r, "j0001", 1.0), approve(r, "b", 1.0, "owner"), issue_next(r, "b")),
+     dict(unit_id="u01", model="other_video"), "j0001"),
+    (lambda r: (set_cost(r, "j0001", 1.0), approve(r, "b", 1.0, "owner"), issue_next(r, "b")),
+     dict(unit_id="u01"), "jobs done or jobs fail"),
+])
+def test_plan_unit_refusals(cast3, setup, kwargs, fragment):
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    setup(root)
+    before = (cast3.plan_file.read_bytes(), (cast3.unit_dir("u01") / "ref.mp4").read_bytes())
+    with pytest.raises(CineRecastError, match=fragment):
+        refresh_unit(root, **kwargs)
+    assert (cast3.plan_file.read_bytes(), (cast3.unit_dir("u01") / "ref.mp4").read_bytes()) == before
+
+
+def test_plan_unit_refuses_while_the_casting_is_not_ready(cast3):
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    set_right(root, "likeness_consent", "no")
+    with pytest.raises(CineRecastError, match="casting is not ready"):
+        refresh_unit(root, "u01")
+
+
+def test_report_shows_the_model_the_selected_take_was_made_with(cast3, tmp_path):
+    from conftest import fake_raw
+
+    from cine_recast.conform import conform
+    from cine_recast.plan import refresh_unit
+    from cine_recast.report import write_report
+
+    root = _per_shot(cast3)
+    set_cost(root, "j0001", 40.0); approve(root, "b", 40.0, "owner"); issue_next(root, "b")
+    take = record_done(root, "j0001", "prov-1", 38.0, fake_raw(root, "u01", tmp_path))["take"]
+    conform(root, "u01", take, take_cuts=[0, 30])
+    select(root, "u01", take)
+    refresh_unit(root, "u01", model="other_video")                    # the next takes come from another model
+    refresh_unit(root, "u02", model="other_video")
+    text = write_report(root).read_text(encoding="utf-8")
+    [row] = [line for line in text.splitlines() if line.startswith("| 1 | 0-30 |")]
+    assert "| seedance_2_5 |" in row and "other_video" not in row
+    [row] = [line for line in text.splitlines() if line.startswith("| 2 | 30-54 |")]
+    assert "| other_video |" in row                                    # no take selected: the unit's model

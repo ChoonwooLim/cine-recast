@@ -109,10 +109,28 @@ def _scores(pp: ProjectPaths, item: dict) -> dict:
     return shots if isinstance(shots, dict) else {}
 
 
+def _take_model(pp: ProjectPaths, item: dict, jobs: dict[str, dict]):
+    """The model the unit's selected take was made with: the model its job was sent with (the job
+    named in the take's meta.json), or the unit's model when that is not known."""
+    take_id = item.get("selected_take")
+    meta = pp.take_dir(item["id"], take_id) / "meta.json" if isinstance(take_id, str) and take_id else None
+    if meta is not None and meta.is_file():
+        try:
+            job = jobs.get(read_project_json(pp.root, meta).get("job"))
+        except (CineRecastError, AttributeError, TypeError):
+            job = None
+        sent = job.get("sent_params") if isinstance(job, dict) else None
+        if isinstance(sent, dict) and isinstance(sent.get("model"), str):
+            return sent["model"]
+    return item.get("model")
+
+
 def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], list[int]]:
     """The per-shot table, the shots judged retry, and the shots whose picture is almost the
-    reference's (overlap_ratio of COPY_OVERLAP or more), all from the selected takes."""
+    reference's (overlap_ratio of COPY_OVERLAP or more), all from the selected takes. The model is
+    the one the selected take was made with (_take_model)."""
     pp = ProjectPaths(root)
+    jobs = {j["id"]: j for j in plan.load(root)["jobs"] if isinstance(j, dict) and isinstance(j.get("id"), str)}
     lines = ["## 숏별 결과", "",
              "| 숏 | 프레임 범위 | 단위 | 방법 | 모델 | 선택 테이크 | 카메라 | 움직임 | 색 | 깜빡임 비율 | 원본 유사 영역 | 판정 |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -129,7 +147,7 @@ def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], li
             copies.append(shot.index)
         row = (shot.index, f"{shot.start}-{shot.end}",
                item["id"] if item else None, item.get("method") if item else None,
-               item.get("model") if item else None, item.get("selected_take") if item else None,
+               _take_model(pp, item, jobs) if item else None, item.get("selected_take") if item else None,
                *(_judged(score, name) for name in ("camera", "motion", "color", "flicker_ratio")),
                _num(score.get("overlap_ratio")), score.get("verdict"))
         lines.append("| " + " | ".join(_cell(v) for v in row) + " |")
