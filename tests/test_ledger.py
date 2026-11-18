@@ -144,3 +144,12 @@ def test_damaged_ledger_fails_closed(tmp_path, bad):
     report = audit(tmp_path)
     assert report["ok"] is False
     assert any("line 3" in p for p in report["problems"])
+
+
+@pytest.mark.parametrize("char", ["\u2028", "\u2029", "\u0085"])
+def test_unicode_line_separators_in_text_do_not_break_the_ledger(tmp_path, char):
+    approve(tmp_path, "b", 100.0, "owner", note=f"a{char}b")
+    issue(tmp_path, "j1", "b", 10.0)
+    fail(tmp_path, "j1", f"x{char}y")
+    report = audit(tmp_path)
+    assert report["ok"] is True and report["problems"] == []

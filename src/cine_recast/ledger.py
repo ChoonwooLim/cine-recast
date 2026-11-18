@@ -74,7 +74,8 @@ def _load(root: Path) -> tuple[list[dict], list[str]]:
         return [], []
     events: list[dict] = []
     problems: list[str] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+        line = line.removesuffix("\r")
         if not line.strip():
             continue
         try:
