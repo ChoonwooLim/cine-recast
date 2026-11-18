@@ -7,7 +7,8 @@ is used by compare() alone, and only there is its audio heard.
 
 The sound is cut or padded to the film's length: master.mov carries it as 24-bit PCM, final.mp4 as
 AAC at 256 kb/s. A preview (out/preview.mp4) joins the selected takes without the confirmations so
-that the shots can be watched in sequence before they are confirmed.
+that the shots can be watched in sequence before they are confirmed. Extra shots (extras.py, shots
+that are not in the reference) are never used: the film is the reference's shots, one for one.
 """
 
 import tempfile

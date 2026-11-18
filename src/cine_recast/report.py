@@ -3,7 +3,7 @@ each unit, sound, spending with the project budget, and open items."""
 
 from pathlib import Path
 
-from cine_recast import ledger, plan, sound, soundtrack
+from cine_recast import extras, ledger, plan, sound, soundtrack
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.casting import load as load_casting
 from cine_recast.casting import not_applicable_holds
@@ -227,6 +227,26 @@ def _sound(root: Path) -> tuple[list[str], list[str]]:
     return [*lines, ""], open_lines
 
 
+def _extras(root: Path) -> tuple[list[str], list[str]]:
+    """The extra shots (not in the reference) and those issued but not closed."""
+    items = extras.load_items(root)
+    lines = ["## 원본에 없는 숏", ""]
+    if not items:
+        return [*lines, "원본에 없는 숏이 없다.", ""], []
+    credits = ledger.job_credits(root)
+    lines += ["| 숏 | 이름 | 종류 | 출처 | 모델 | 해상도 | 크레딧 | 상태 |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for item in items:
+        source = item.get("source") if isinstance(item.get("source"), dict) else {}
+        parts = [f"{source['extend']} {source.get('direction')}"] if "extend" in source else []
+        parts += [f"{key} {source[key]}" for key in ("start", "end") if key in source]
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        lines.append("| " + " | ".join(_cell(v) for v in (
+            item.get("id"), item.get("label"), item.get("kind"), ", ".join(parts) or None, params.get("model"),
+            params.get("resolution"), _num(credits.get(item.get("id")), 2), item.get("state"))) + " |")
+    lines += ["", "- 원본에 없는 숏은 사용자가 따로 쓰는 컷이다. `assemble`은 이 숏을 넣지 않는다."]
+    return [*lines, ""], [str(item.get("id")) for item in items if item.get("state") == "issued"]
+
+
 def write_report(root: Path) -> Path:
     """Write out/report.md and return its path."""
     root = Path(root)
@@ -235,6 +255,7 @@ def write_report(root: Path) -> Path:
     shot_lines, retry, copies = _shot_table(root, units)
     confirm_lines, waiting = _confirmations(units)
     sound_lines, sound_open = _sound(root)
+    extra_lines, extra_open = _extras(root)
     unselected = [u["id"] for u in units if not u.get("selected_take")]
     open_lines = ["## 열린 항목", ""]
     open_lines.append("- 선택 테이크가 없는 단위: " + (", ".join(unselected) if unselected else "없음"))
@@ -244,8 +265,9 @@ def write_report(root: Path) -> Path:
                       + (", ".join(map(str, copies)) + " - 원본을 복사한 화면이 아닌지 눈으로 확인한다"
                          if copies else "없음"))
     open_lines += sound_open
+    open_lines.append("- 내보냈지만 기록을 닫지 않은 원본에 없는 숏: " + (", ".join(extra_open) if extra_open else "없음"))
     text = "\n".join(["# CineRecast 보고서", "", *_summary(root), *_rights(root), *_swap_table(root),
-                      *shot_lines, *confirm_lines, *sound_lines, *_cost(root), *open_lines, ""])
+                      *shot_lines, *confirm_lines, *extra_lines, *sound_lines, *_cost(root), *open_lines, ""])
     pp.out_dir.mkdir(parents=True, exist_ok=True)
     out = pp.out_dir / "report.md"
     out.write_text(text, encoding="utf-8", newline="\n")

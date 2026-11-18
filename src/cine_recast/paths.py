@@ -129,6 +129,14 @@ class ProjectPaths:
         return self.root / "sounds"
 
     @property
+    def extras_file(self) -> Path:
+        return self.root / "extras.json"
+
+    @property
+    def extras_dir(self) -> Path:
+        return self.root / "extras"
+
+    @property
     def out_dir(self) -> Path:
         return self.root / "out"
 

@@ -539,6 +539,19 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 쓰는 것: `out/compare.mp4`. 왼쪽이 원본, 오른쪽이 완성본이고 원본에 소리가 있으면 그 소리가 들어간다. 검토용이다.
 - 거부: `out/final.mp4`가 없다.
 
+### extra
+
+원본에 없는 숏(시작 숏, 이어 주는 숏, 끝 숏)을 만드는 영상 작업이다. `assemble`에는 들어가지 않는다.
+
+```powershell
+& $cr extra add $p --label "roar" --prompt "The giant roars at the camera before it attacks." --model seedance_2_5 --seconds 4 --batch extra-1 --extend u01/t001 --direction backward
+& $cr extra list $p
+& $cr extra set-cost $p --extra x0001 --credits 40
+& $cr extra next $p --batch extra-1
+& $cr extra done $p --extra x0001 --provider-id 7c2f0e1a-5b1d-4c7e-9a43-0d6f2b8e1c55 --credits 38 --file "$p\downloads\x0001.mp4"
+& $cr extra fail $p --extra x0002 --reason "provider error: content rejected" --credits 0
+```
+
 ### sound add
 
 소리 생성 작업을 하나 계획하고 영화의 프레임에 놓는다. 소리 하나는 프롬프트 하나와 길이 하나로 부르는 생성 호출 하나다.

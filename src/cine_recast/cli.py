@@ -5,7 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import __version__, assemble, assets, conform, ledger, plan, qc, report, review, sound, soundtrack, takes
+from . import __version__, assemble, assets, conform, extras, ledger, plan, qc, report, review, sound, soundtrack, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -203,6 +203,49 @@ def _cmd_assets_fail(args: argparse.Namespace) -> int:
 def _cmd_assets_use(args: argparse.Namespace) -> int:
     assets.use(Path(args.project), args.element, args.image)
     print(f"{args.element}: swap image {args.image}")
+    return 0
+
+
+def _cmd_extra_add(args: argparse.Namespace) -> int:
+    item = extras.add(Path(args.project), label=args.label, prompt=args.prompt, model=args.model,
+                      seconds=args.seconds, batch=args.batch, extend=args.extend, direction=args.direction,
+                      start=args.start, end=args.end, refs=args.ref or [], quality=args.quality,
+                      aspect_ratio=args.aspect_ratio)
+    print(item["id"])
+    return 0
+
+
+def _cmd_extra_list(args: argparse.Namespace) -> int:
+    _print_json(extras.list_extras(Path(args.project)))
+    return 0
+
+
+def _cmd_extra_set_cost(args: argparse.Namespace) -> int:
+    item = extras.set_cost(Path(args.project), args.extra, args.credits)
+    print(f"{item['id']}: quoted {item['est_credits']} credits")
+    return 0
+
+
+def _cmd_extra_next(args: argparse.Namespace) -> int:
+    try:
+        issued = extras.issue_next(Path(args.project), args.batch)
+    except extras.IssueRefused as exc:
+        _print_json(exc.issued)  # extras issued before the refusal must reach the agent
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 2
+    _print_json(issued)
+    return 0
+
+
+def _cmd_extra_done(args: argparse.Namespace) -> int:
+    result = extras.record_done(Path(args.project), args.extra, args.provider_id, args.credits, Path(args.file))
+    print(f"{args.extra}: done, result {result['result']}")
+    return 0
+
+
+def _cmd_extra_fail(args: argparse.Namespace) -> int:
+    extras.record_fail(Path(args.project), args.extra, args.reason, args.credits)
+    print(f"{args.extra}: failed")
     return 0
 
 
@@ -589,6 +632,55 @@ def _build_parser() -> argparse.ArgumentParser:
     sound_mix = sound_sub.add_parser("mix", help="mix the done, unmuted sounds into out/soundtrack.wav at -16 LUFS")
     sound_mix.add_argument("project", help="project folder")
     sound_mix.set_defaults(func=_cmd_sound_mix)
+
+    extra_p = sub.add_parser("extra", help="extra shots that are not in the reference (extras.json); never "
+                                           "part of assemble")
+    extra_sub = extra_p.add_subparsers(dest="extra_command")
+    extra_add = extra_sub.add_parser("add", help="plan a video job for a shot that is not in the reference")
+    extra_add.add_argument("project", help="project folder")
+    extra_add.add_argument("--label", required=True, help="short name of the shot (any language but Chinese)")
+    extra_add.add_argument("--prompt", required=True, help="English description of the shot")
+    extra_add.add_argument("--model", required=True, help="video model id from models.json")
+    extra_add.add_argument("--seconds", required=True, type=int, help="whole seconds within the model's limits")
+    extra_add.add_argument("--batch", required=True, help="approval batch of the extra")
+    extra_add.add_argument("--extend", default=None, help="take to continue, U/T (e.g. u01/t001); needs --direction")
+    extra_add.add_argument("--direction", choices=extras.DIRECTIONS, default=None,
+                           help="backward: the new clip ends where the take begins; forward: it starts where the "
+                                "take ends")
+    extra_add.add_argument("--start", default=None, help="first frame of the new clip, U/T:FRAME (FRAME is first, "
+                                                         "last or a frame number of the take's raw file)")
+    extra_add.add_argument("--end", default=None, help="last frame of the new clip, U/T:FRAME")
+    extra_add.add_argument("--ref", action="append", help="reference image under assets/ or swap/ (repeatable)")
+    extra_add.add_argument("--quality", choices=plan.QUALITIES, default="draft",
+                           help="draft: the model's first resolution, final: its last")
+    extra_add.add_argument("--aspect-ratio", default=None,
+                           help="W:H offered by the model (default: nearest the picture area)")
+    extra_add.set_defaults(func=_cmd_extra_add)
+    extra_list = extra_sub.add_parser("list", help="print the extras and the params and inputs each is sent with")
+    extra_list.add_argument("project", help="project folder")
+    extra_list.set_defaults(func=_cmd_extra_list)
+    extra_cost = extra_sub.add_parser("set-cost", help="record an extra's quoted cost")
+    extra_cost.add_argument("project", help="project folder")
+    extra_cost.add_argument("--extra", required=True)
+    extra_cost.add_argument("--credits", required=True, type=float)
+    extra_cost.set_defaults(func=_cmd_extra_set_cost)
+    extra_next = extra_sub.add_parser("next", help="issue the batch's quoted extras through the ledger")
+    extra_next.add_argument("project", help="project folder")
+    extra_next.add_argument("--batch", required=True)
+    extra_next.set_defaults(func=_cmd_extra_next)
+    extra_done = extra_sub.add_parser("done", help="record a finished extra and store its file")
+    extra_done.add_argument("project", help="project folder")
+    extra_done.add_argument("--extra", required=True)
+    extra_done.add_argument("--provider-id", required=True)
+    extra_done.add_argument("--credits", required=True, type=float)
+    extra_done.add_argument("--file", required=True, help="returned video (.mp4, .mov, .mkv, .webm)")
+    extra_done.set_defaults(func=_cmd_extra_done)
+    extra_fail = extra_sub.add_parser("fail", help="record a failed extra")
+    extra_fail.add_argument("project", help="project folder")
+    extra_fail.add_argument("--extra", required=True)
+    extra_fail.add_argument("--reason", required=True)
+    extra_fail.add_argument("--credits", type=float, default=0.0)
+    extra_fail.set_defaults(func=_cmd_extra_fail)
 
     approve = sub.add_parser("approve", help="record a credit approval for a batch")
     approve.add_argument("project", help="project folder")

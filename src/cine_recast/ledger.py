@@ -335,6 +335,13 @@ def job_states(root: Path) -> dict[str, str]:
     return {job_id: job["finish"] or "issued" for job_id, job in jobs.items()}
 
 
+def job_credits(root: Path) -> dict[str, float]:
+    """Job id -> the credits recorded when it finished (done or failed), for finished jobs only.
+    Fails closed like job_states."""
+    _, jobs = _state(_events(root))
+    return {job_id: job["actual"] for job_id, job in jobs.items() if job["actual"] is not None}
+
+
 def audit(root: Path) -> dict:
     """Check the ledger. Besides the batches and totals, "budget" is _budget_status (None without a
     budget); an approval that brought the approved total above the budget in force at that moment
