@@ -150,6 +150,13 @@ def probe_size(path: Path) -> tuple[int, int]:
     return int(streams[0]["width"]), int(streams[0]["height"])
 
 
+def audio_streams(path: Path) -> int:
+    """The number of audio streams ffprobe finds in the file. Raises CineRecastError when ffprobe
+    cannot read it (ToolNotFound when ffprobe is missing)."""
+    data = _ffprobe(Path(path), ["-select_streams", "a", "-show_entries", "stream=index"])
+    return len(data.get("streams") or [])
+
+
 def run(args: list[str]) -> None:
     """Run ffmpeg with the given arguments. Raises CineRecastError with the stderr tail on failure.
 
@@ -164,6 +171,37 @@ def run(args: list[str]) -> None:
         raise ToolNotFound("ffmpeg was not found on PATH") from exc
     if proc.returncode != 0:
         raise CineRecastError(f"ffmpeg failed: {_tail(proc.stderr)}")
+
+
+def run_piped(args: list[str], data: bytes | None = None) -> tuple[bytes, str]:
+    """Run ffmpeg with `data` on its standard input (when given) and return (standard output bytes,
+    standard error text). Raises CineRecastError with the stderr tail on failure. Inputs are guarded
+    as in run()."""
+    try:
+        proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", *_guard_inputs(args)],
+                              input=data, capture_output=True)   # -nostdin: no key commands; pipe:0 still reads
+    except FileNotFoundError as exc:
+        raise ToolNotFound("ffmpeg was not found on PATH") from exc
+    err = proc.stderr.decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise CineRecastError(f"ffmpeg failed: {_tail(err)}")
+    return proc.stdout, err
+
+
+def decode_audio(path: Path, *, rate: int, channels: int, seconds: float | None = None) -> np.ndarray:
+    """The first audio stream of the file as float32 samples of shape (samples, channels), resampled
+    to `rate` and mixed to `channels` by ffmpeg; with `seconds`, only that much from the start."""
+    args = ["-v", "error", "-i", str(path), "-map", "0:a:0", "-vn", "-ac", str(channels), "-ar", str(rate)]
+    if seconds is not None:
+        args += ["-t", f"{float(seconds):.6f}"]
+    out, _ = run_piped([*args, "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"])
+    usable = len(out) - len(out) % (4 * channels)
+    return np.frombuffer(out[:usable], dtype="<f4").reshape(-1, channels).astype(np.float32)
+
+
+def raw_audio_input(rate: int, channels: int) -> list[str]:
+    """Input arguments for float32 samples (as decode_audio returns them) given on standard input."""
+    return ["-f", "f32le", "-ar", str(rate), "-ac", str(channels), "-i", "pipe:0"]
 
 
 SCALE_FLAGS = "flags=bicubic+accurate_rnd+full_chroma_int"   # keeps mid-grey at 128 when scaling

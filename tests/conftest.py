@@ -241,6 +241,69 @@ IMAGE_MODEL = {
 }
 
 
+AUDIO_MODEL = {
+    "id": "audio_model_x", "kind": "audio", "min_seconds": 1, "max_seconds": 30, "read_at": "2026-11-18",
+    "notes": {"instrumental": True},
+}
+
+
+def make_tone(path: Path, seconds: float, *, frequency: float = 1000.0, volume: float = 0.5,
+              rate: int = 48000, channels: int = 1) -> Path:
+    """Write a sine tone as a 16-bit WAV file (or any format the suffix names) and return its path."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _run(["-f", "lavfi", "-i", f"sine=frequency={frequency}:sample_rate={rate}:duration={seconds}",
+          "-af", f"volume={volume}", "-ac", str(channels), str(path)])
+    return path
+
+
+def make_noise(path: Path, seconds: float, *, seed: int = 1, color: str = "pink", amplitude: float = 0.5,
+               rate: int = 48000) -> Path:
+    """Write seeded noise as an audio file and return its path."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _run(["-f", "lavfi", "-i",
+          f"anoisesrc=color={color}:seed={seed}:amplitude={amplitude}:sample_rate={rate}:duration={seconds}",
+          str(path)])
+    return path
+
+
+@pytest.fixture(scope="session")
+def _sound3_template(tmp_path_factory, _analyzed3_template) -> Path:
+    """analyzed3 + a video, an image and an audio model, built once per session."""
+    import shutil
+
+    from cine_recast.jsonio import write_json
+    from cine_recast.paths import ProjectPaths
+
+    root = tmp_path_factory.mktemp("sound3") / "p"
+    shutil.copytree(_analyzed3_template, root)
+    write_json(ProjectPaths(root).models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL, AUDIO_MODEL]})
+    return root
+
+
+@pytest.fixture
+def sound3(_sound3_template, tmp_path):
+    """An isolated copy of the analysed three-shot project (90 frames at 24 fps, cuts 30 and 54) with
+    the audio model audio_model_x (1 to 30 s)."""
+    return _copy_project(_sound3_template, tmp_path)
+
+
+def done_sound(root: Path, file: Path, *, kind: str = "sfx", seconds: float = 2, batch: str = "snd",
+               credits: float = 1.0, **placement) -> str:
+    """Run one sound through add, set-cost, approve (its own credits), issue and done with `file` as the
+    returned file; `placement` goes to sound.add. Returns the sound id."""
+    from cine_recast import ledger, sound
+
+    item = sound.add(root, kind=kind, label="test sound", prompt="A short test sound.", model="audio_model_x",
+                     seconds=seconds, batch=batch, **placement)
+    sound.set_cost(root, item["id"], credits)
+    ledger.approve(root, batch, credits, "owner")
+    sound.issue_next(root, batch)
+    sound.record_done(root, item["id"], "prov-snd", credits, file)
+    return item["id"]
+
+
 @pytest.fixture(scope="session")
 def _assets3_template(tmp_path_factory, _analyzed3_template) -> Path:
     """analyzed3 + the elements without swaps + a video and an image model + rights for generated

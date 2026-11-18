@@ -21,6 +21,11 @@ def inside_folder(path: Path, folders: Iterable[Path]) -> Path | None:
     return None
 
 
+def sha256_of(path: Path) -> str:
+    """SHA-256 of the file's bytes, streamed, as hex."""
+    return _sha256(path)
+
+
 def _sha256(path: Path) -> str:
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -59,6 +64,10 @@ class ProjectPaths:
     @property
     def cuts_file(self) -> Path:
         return self.analysis_dir / "cuts.json"
+
+    @property
+    def audio_file(self) -> Path:
+        return self.analysis_dir / "audio.json"
 
     @property
     def review_dir(self) -> Path:
@@ -112,8 +121,24 @@ class ProjectPaths:
         return self.takes_dir / unit_id / take_id
 
     @property
+    def sounds_file(self) -> Path:
+        return self.root / "sounds.json"
+
+    @property
+    def sounds_dir(self) -> Path:
+        return self.root / "sounds"
+
+    @property
     def out_dir(self) -> Path:
         return self.root / "out"
+
+    @property
+    def soundtrack_file(self) -> Path:
+        return self.out_dir / "soundtrack.wav"
+
+    @property
+    def soundtrack_record(self) -> Path:
+        return self.out_dir / "soundtrack.json"
 
     def material_folders(self) -> list[Path]:
         """The folders that hold the reference, what the tool made from it, and the stored results:

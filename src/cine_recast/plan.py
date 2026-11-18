@@ -39,7 +39,7 @@ from cine_recast.textrules import is_english_prompt
 
 METHODS = ("edit", "regen")
 QUALITIES = ("draft", "final")
-MODEL_KINDS = ("video", "image")
+MODEL_KINDS = ("video", "image", "audio")
 ROLES = ("video", "image")
 QC_SCORES = ("camera", "motion", "color", "flicker_ratio")    # the judged scores of qc, the names qc_skip takes
 TOOL = "generate_video"
@@ -77,7 +77,8 @@ def check_models(root: Path) -> list[str]:
     """Problems found in models.json as English sentences. An empty list means it is valid.
 
     An image model (kind "image") needs no min_seconds, max_seconds or video_ref, and its
-    resolutions may be an empty list.
+    resolutions may be an empty list. An audio model (kind "audio", for sound.py) needs only id,
+    min_seconds, max_seconds and read_at; other keys, such as notes, are ignored.
     """
     models, problems = _read_models(root)
     seen: set[str] = set()
@@ -96,6 +97,7 @@ def check_models(root: Path) -> list[str]:
         if model.get("kind") not in MODEL_KINDS:
             problems.append(f"{label}: kind must be one of {', '.join(MODEL_KINDS)}.")
         image = model.get("kind") == "image"
+        audio = model.get("kind") == "audio"
         if not image:
             low, high = model.get("min_seconds"), model.get("max_seconds")
             for key, value in (("min_seconds", low), ("max_seconds", high)):
@@ -103,6 +105,10 @@ def check_models(root: Path) -> list[str]:
                     problems.append(f"{label}: {key} must be a number greater than 0.")
             if is_number(low) and is_number(high) and low > high:
                 problems.append(f"{label}: min_seconds ({low}) must not be longer than max_seconds ({high}).")
+        if not is_text(model.get("read_at")):
+            problems.append(f"{label}: read_at must give the date the model list was read.")
+        if audio:
+            continue
         for key, may_be_empty in (("aspect_ratios", False), ("resolutions", image)):
             value = model.get(key)
             if not isinstance(value, list) or not (value or may_be_empty) or not all(is_text(v) for v in value):
@@ -112,8 +118,6 @@ def check_models(root: Path) -> list[str]:
         refs = model.get("image_refs")
         if isinstance(refs, bool) or not isinstance(refs, int) or refs < 0:
             problems.append(f"{label}: image_refs must be a whole number of at least 0.")
-        if not is_text(model.get("read_at")):
-            problems.append(f"{label}: read_at must give the date the model list was read.")
     return problems
 
 

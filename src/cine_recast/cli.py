@@ -5,7 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import __version__, assemble, assets, conform, ledger, plan, qc, report, takes
+from . import __version__, assemble, assets, conform, ledger, plan, qc, report, sound, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -209,6 +209,58 @@ def _cmd_assets_use(args: argparse.Namespace) -> int:
 def _budget_line(budget: dict) -> str:
     return (f"budget: limit {budget['limit']}, approved {budget['approved']}, remaining {budget['remaining']} "
             f"(by {budget['by']})")
+
+
+def _cmd_sound_add(args: argparse.Namespace) -> int:
+    item = sound.add(Path(args.project), kind=args.kind, label=args.label, prompt=args.prompt, model=args.model,
+                     seconds=args.seconds, batch=args.batch, at_frame=args.at_frame, shot=args.shot,
+                     offset_frames=args.offset_frames, gain_db=args.gain_db, fade_in=args.fade_in,
+                     fade_out=args.fade_out)
+    print(item["id"])
+    return 0
+
+
+def _cmd_sound_list(args: argparse.Namespace) -> int:
+    _print_json(sound.list_sounds(Path(args.project)))
+    return 0
+
+
+def _cmd_sound_set_cost(args: argparse.Namespace) -> int:
+    item = sound.set_cost(Path(args.project), args.sound, args.credits)
+    print(f"{item['id']}: quoted {item['est_credits']} credits")
+    return 0
+
+
+def _cmd_sound_next(args: argparse.Namespace) -> int:
+    try:
+        issued = sound.issue_next(Path(args.project), args.batch)
+    except sound.IssueRefused as exc:
+        _print_json(exc.issued)  # sounds issued before the refusal must reach the agent
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 2
+    _print_json(issued)
+    return 0
+
+
+def _cmd_sound_done(args: argparse.Namespace) -> int:
+    result = sound.record_done(Path(args.project), args.sound, args.provider_id, args.credits, Path(args.file))
+    print(f"{args.sound}: done, file {result['file']}")
+    return 0
+
+
+def _cmd_sound_fail(args: argparse.Namespace) -> int:
+    sound.record_fail(Path(args.project), args.sound, args.reason, args.credits)
+    print(f"{args.sound}: failed")
+    return 0
+
+
+def _cmd_sound_set(args: argparse.Namespace) -> int:
+    root = Path(args.project)
+    item = sound.set_placement(root, args.sound, at_frame=args.at_frame, shot=args.shot,
+                               offset_frames=args.offset_frames, gain_db=args.gain_db, fade_in=args.fade_in,
+                               fade_out=args.fade_out, mute=args.mute, unmute=args.unmute)
+    print(sound.placement_line(root, item))
+    return 0
 
 
 def _cmd_approve(args: argparse.Namespace) -> int:
@@ -450,6 +502,67 @@ def _build_parser() -> argparse.ArgumentParser:
                                                            "assets/hero/a0001_1.png")
     assets_use.set_defaults(func=_cmd_assets_use)
 
+    sound_p = sub.add_parser("sound", help="generated music, effects and ambience (sounds.json) and the mix")
+    sound_sub = sound_p.add_subparsers(dest="sound_command")
+
+    def placement(parser: argparse.ArgumentParser) -> None:
+        start = parser.add_mutually_exclusive_group()
+        start.add_argument("--at-frame", type=int, default=None, help="film frame where the sound starts")
+        start.add_argument("--shot", type=int, default=None, help="start at the first frame of this shot")
+        parser.add_argument("--offset-frames", type=int, default=None,
+                            help="frames added to the first frame of --shot (may be negative)")
+
+    sound_add = sound_sub.add_parser("add", help="plan an audio-generation job placed on a film frame")
+    sound_add.add_argument("project", help="project folder")
+    sound_add.add_argument("--kind", required=True, choices=sound.KINDS)
+    sound_add.add_argument("--label", required=True, help="short name of the sound (any language but Chinese)")
+    sound_add.add_argument("--prompt", required=True, help="English description of the sound itself")
+    sound_add.add_argument("--model", required=True, help="audio model id from models.json")
+    sound_add.add_argument("--seconds", required=True, type=float, help="duration asked from the model")
+    sound_add.add_argument("--batch", required=True, help="approval batch of the sound")
+    placement(sound_add)
+    sound_add.add_argument("--gain-db", type=float, default=0.0, help="mix gain, -60 to 12 (default 0)")
+    sound_add.add_argument("--fade-in", type=float, default=0.0, help="fade-in seconds (default 0)")
+    sound_add.add_argument("--fade-out", type=float, default=sound.DEFAULT_FADE_OUT,
+                           help=f"fade-out seconds (default {sound.DEFAULT_FADE_OUT})")
+    sound_add.set_defaults(func=_cmd_sound_add)
+    sound_list = sound_sub.add_parser("list", help="print the sounds, the params each is sent with and their "
+                                                   "placement, as JSON")
+    sound_list.add_argument("project", help="project folder")
+    sound_list.set_defaults(func=_cmd_sound_list)
+    sound_cost = sound_sub.add_parser("set-cost", help="record a sound's quoted cost")
+    sound_cost.add_argument("project", help="project folder")
+    sound_cost.add_argument("--sound", required=True)
+    sound_cost.add_argument("--credits", required=True, type=float)
+    sound_cost.set_defaults(func=_cmd_sound_set_cost)
+    sound_next = sound_sub.add_parser("next", help="issue the batch's quoted sounds through the ledger")
+    sound_next.add_argument("project", help="project folder")
+    sound_next.add_argument("--batch", required=True)
+    sound_next.set_defaults(func=_cmd_sound_next)
+    sound_done = sound_sub.add_parser("done", help="record a finished sound and store its file")
+    sound_done.add_argument("project", help="project folder")
+    sound_done.add_argument("--sound", required=True)
+    sound_done.add_argument("--provider-id", required=True)
+    sound_done.add_argument("--credits", required=True, type=float)
+    sound_done.add_argument("--file", required=True, help="returned audio file (.wav, .mp3, .m4a, .ogg, .flac)")
+    sound_done.set_defaults(func=_cmd_sound_done)
+    sound_fail = sound_sub.add_parser("fail", help="record a failed sound")
+    sound_fail.add_argument("project", help="project folder")
+    sound_fail.add_argument("--sound", required=True)
+    sound_fail.add_argument("--reason", required=True)
+    sound_fail.add_argument("--credits", type=float, default=0.0)
+    sound_fail.set_defaults(func=_cmd_sound_fail)
+    sound_set = sound_sub.add_parser("set", help="change a sound's start, gain, fades or mute (free, at any time)")
+    sound_set.add_argument("project", help="project folder")
+    sound_set.add_argument("--sound", required=True)
+    placement(sound_set)
+    sound_set.add_argument("--gain-db", type=float, default=None, help="mix gain, -60 to 12")
+    sound_set.add_argument("--fade-in", type=float, default=None, help="fade-in seconds")
+    sound_set.add_argument("--fade-out", type=float, default=None, help="fade-out seconds")
+    muting = sound_set.add_mutually_exclusive_group()
+    muting.add_argument("--mute", action="store_true", help="leave the sound out of the mix")
+    muting.add_argument("--unmute", action="store_true", help="put a muted sound back into the mix")
+    sound_set.set_defaults(func=_cmd_sound_set)
     approve = sub.add_parser("approve", help="record a credit approval for a batch")
     approve.add_argument("project", help="project folder")
     approve.add_argument("--batch", required=True)

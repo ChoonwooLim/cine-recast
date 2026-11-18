@@ -40,6 +40,15 @@ def test_add_refusals(assets3, kwargs, fragment):
         add(assets3.root, **{**base, **kwargs})
 
 
+def test_an_audio_model_is_refused_for_assets(assets3):
+    from conftest import AUDIO_MODEL
+
+    write_json(assets3.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL, AUDIO_MODEL]})
+    with pytest.raises(CineRecastError, match="assets need an image model"):
+        add(assets3.root, element="hero", prompt=PROMPT, model="audio_model_x", batch="assets-1")
+    assert not assets3.assets_file.exists()
+
+
 def test_issue_goes_through_the_ledger(assets3):
     add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
     assert issue_next(assets3.root, "assets-1") == []                           # nothing quoted yet

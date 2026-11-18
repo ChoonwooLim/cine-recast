@@ -150,7 +150,7 @@ def test_plan_is_replaced_only_before_any_issue(planned3):
 
 @pytest.mark.parametrize("mutate, fragment", [
     (lambda m: m.pop("read_at"), "read_at"),
-    (lambda m: m.update(kind="audio"), "kind"),
+    (lambda m: m.update(kind="sound"), "kind"),
     (lambda m: m.update(min_seconds=20), "min_seconds"),
     (lambda m: m.update(aspect_ratios=[]), "aspect_ratios"),
     (lambda m: m.update(resolutions="480p"), "resolutions"),
@@ -165,6 +165,40 @@ def test_check_models_problems(cast3, mutate, fragment):
     mutate(data["models"][0])
     write_json(cast3.models_file, data)
     assert any(fragment in p for p in check_models(cast3.root))
+
+
+def _with_audio_model(root):
+    from conftest import AUDIO_MODEL, EXAMPLE_MODEL
+
+    write_json(root / "models.json", {"models": [EXAMPLE_MODEL, AUDIO_MODEL]})
+
+
+def test_an_audio_model_needs_only_its_duration_limits(cast3):
+    _with_audio_model(cast3.root)                       # no aspect_ratios, resolutions, video_ref or image_refs
+    assert check_models(cast3.root) == []
+
+
+@pytest.mark.parametrize("mutate, fragment", [
+    (lambda m: m.pop("read_at"), "read_at"),
+    (lambda m: m.pop("max_seconds"), "max_seconds"),
+    (lambda m: m.update(min_seconds=0), "min_seconds"),
+    (lambda m: m.update(min_seconds=True), "min_seconds"),
+    (lambda m: m.update(max_seconds="30"), "max_seconds"),
+    (lambda m: m.update(min_seconds=40), "must not be longer than max_seconds"),
+])
+def test_audio_model_problems(cast3, mutate, fragment):
+    _with_audio_model(cast3.root)
+    data = read_json(cast3.models_file)
+    mutate(data["models"][1])
+    write_json(cast3.models_file, data)
+    assert any(fragment in p and "audio_model_x" in p for p in check_models(cast3.root))
+
+
+def test_an_audio_model_is_refused_for_units(cast3):
+    _with_audio_model(cast3.root)
+    with pytest.raises(CineRecastError, match="units need a video model"):
+        build(cast3.root, model="audio_model_x", method="regen", batch="b")
+    assert not cast3.plan_file.exists()
 
 
 def test_check_models_valid_and_missing(cast3):
