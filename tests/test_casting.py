@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 from conftest import good_casting
 
@@ -45,3 +47,21 @@ def test_swaps_for_shots(analyzed3, tmp_path):
 def test_template_lists_shots(analyzed3):
     t = read_json(write_template(analyzed3.root))
     assert [s["shot"] for s in t["shots"]] == [1, 2, 3] and t["elements"] == [] and t["swaps"] == []
+
+
+def test_relative_swap_images_resolve_against_the_project(analyzed3, tmp_path, monkeypatch):
+    good_casting(analyzed3.root, tmp_path)
+    local = analyzed3.root / "refs" / "person.png"
+    local.parent.mkdir()
+    shutil.copyfile(tmp_path / "refs" / "person_front.png", local)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "cwd_only.png").write_bytes(local.read_bytes())
+    monkeypatch.chdir(elsewhere)
+    c = read_json(analyzed3.casting_file)
+    c["swaps"][0]["images"] = ["refs/person.png"]
+    write_json(analyzed3.casting_file, c)
+    assert check(analyzed3.root) == []
+    c["swaps"][0]["images"] = ["cwd_only.png"]                          # only found from the working folder
+    write_json(analyzed3.casting_file, c)
+    assert any("not found" in p for p in check(analyzed3.root))

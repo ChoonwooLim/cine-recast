@@ -3,12 +3,21 @@
 A unit is a run of consecutive shots generated in one call. Every unit has jobs; a job moves
 planned -> quoted (set_cost) -> issued (issue_next) -> done or failed (record_done, record_fail).
 A job reaches the agent only through issue_next, which hands it to ledger.issue first and stops
-at the first refusal. The ledger is the authority for job state: every load moves a job forward
-to the state its ledger events prove. The resolution sent follows the job's quality.
-Model limits come only from the project's models.json.
+at the first refusal.
+
+- The ledger is the authority for job state: every load moves a job forward to the state the
+  ledger records for it.
+- A quote is bound to what it priced: set_cost stores a digest of the job's payload (params
+  without the prompt, and the medias), and a job whose payload changed must be quoted again.
+- The resolution sent follows the job's quality.
+- Unit and job ids are never reused within a project: replacing a plan archives it under plans/.
+- Model limits come only from the project's models.json.
 """
 
+import hashlib
+import json
 import math
+import re
 import shutil
 from datetime import datetime, timezone
 from fractions import Fraction
@@ -26,8 +35,22 @@ from cine_recast.textrules import is_english_prompt
 METHODS = ("edit", "regen")
 QUALITIES = ("draft", "final")
 MODEL_KINDS = ("video", "image")
+ROLES = ("video", "image")
 TOOL = "generate_video"
-_UNISSUED = ("planned", "quoted")  # states in which a job has not been handed to the ledger
+_UNISSUED = ("planned", "quoted")          # states in which a job has not been handed to the ledger
+_SENT = ("issued", "done", "failed")       # states in which a job's payload has been sent
+_RANK = {"planned": 0, "quoted": 1, "issued": 2, "done": 3, "failed": 3}
+_UNIT_ID = re.compile(r"^u(\d+)$")
+_JOB_ID = re.compile(r"^j(\d+)$")
+_ARCHIVE = re.compile(r"^plan-(\d+)\.json$")
+
+
+class IssueRefused(CineRecastError):
+    """issue_next stopped at a job. `issued` holds the payloads of the jobs it issued before that."""
+
+    def __init__(self, message: str, issued: list[dict]) -> None:
+        super().__init__(message)
+        self.issued = issued
 
 
 def _now() -> str:
@@ -157,30 +180,12 @@ def _closest_aspect(spec: dict, target: float) -> str:
 
 # --- plan.json -----------------------------------------------------------------------------
 
-def _ledger_states(root: Path) -> dict[str, str]:
-    """Job states proven by the ledger: issued, then the first finish (done or failed).
-
-    Reads only the ledger's valid lines (ledger._load never raises), so a damaged ledger does not
-    block reading the plan; issuing and recording still go through the ledger, which refuses then.
-    Same rules as the ledger's own state: a finish counts only after an issue, the first one wins.
-    """
-    events, _ = ledger._load(root)
-    states: dict[str, str] = {}
-    for ev in events:
-        kind = ev["type"]
-        if kind == "job_issued":
-            states.setdefault(ev["job_id"], "issued")
-        elif kind in ("job_done", "job_failed") and states.get(ev["job_id"]) == "issued":
-            states[ev["job_id"]] = "done" if kind == "job_done" else "failed"
-    return states
-
-
-_RANK = {"planned": 0, "quoted": 1, "issued": 2, "done": 3, "failed": 3}
-
-
 def _reconcile(root: Path, data: dict) -> None:
-    """Move each job forward to the state the ledger proves; never backwards, estimates untouched."""
-    states = _ledger_states(root)
+    """Move each job forward to the state the ledger records; never backwards, estimates untouched.
+
+    ledger.job_states fails closed, so a damaged ledger stops every plan read until it is repaired.
+    """
+    states = ledger.job_states(root)
     for job in data["jobs"]:
         proven = states.get(job.get("id")) if isinstance(job, dict) else None
         if proven is not None and _RANK.get(job.get("state"), -1) <= _RANK[proven]:
@@ -222,8 +227,8 @@ def _find_job(data: dict, job_id: str) -> dict:
 
 def _job_number(job: dict) -> tuple[int, str]:
     jid = str(job.get("id", ""))
-    digits = jid[1:]
-    return (int(digits) if jid.startswith("j") and digits.isdigit() else -1, jid)
+    match = _JOB_ID.match(jid)
+    return (int(match.group(1)) if match else -1, jid)
 
 
 def _new_job(job_id: str, unit_id: str, batch: str, quality: str) -> dict:
@@ -235,12 +240,72 @@ def unit(root: Path, unit_id: str) -> dict:
     return _find_unit(load(root), unit_id)
 
 
+# --- ids that are never reused ---------------------------------------------------------------
+
+def _archives(root: Path) -> list[tuple[int, Path]]:
+    """Archived plans plans/plan-NNNN.json, by number."""
+    folder = Path(root) / "plans"
+    if not folder.is_dir():
+        return []
+    found = [(int(m.group(1)), p) for p in folder.iterdir() if p.is_file() and (m := _ARCHIVE.match(p.name))]
+    return sorted(found)
+
+
+def _archived_plans(root: Path) -> list[dict]:
+    plans = []
+    for _, path in _archives(root):
+        try:
+            data = read_json(path)
+        except ValueError as exc:
+            raise CineRecastError(f"archived plan is not valid JSON: {path}: {exc}") from exc
+        plans.append(data if isinstance(data, dict) else {})
+    return plans
+
+
+def _ids(plans: list[dict], key: str) -> list:
+    return [entry.get("id") for plan in plans if isinstance(plan.get(key), list)
+            for entry in plan[key] if isinstance(entry, dict)]
+
+
+def _highest(pattern: re.Pattern, ids) -> int:
+    return max((int(m.group(1)) for i in ids if isinstance(i, str) and (m := pattern.match(i))), default=0)
+
+
+def _next_job_number(root: Path, current: dict | None) -> int:
+    """Above every job id in the ledger, the current plan and the archived plans."""
+    plans = ([current] if current else []) + _archived_plans(root)
+    return _highest(_JOB_ID, [*ledger.job_states(root), *_ids(plans, "jobs")]) + 1
+
+
+def _next_unit_number(root: Path, current: dict | None) -> int:
+    """Above every unit id in the current and archived plans and under takes/ and analysis/units/."""
+    pp = ProjectPaths(Path(root))
+    plans = ([current] if current else []) + _archived_plans(root)
+    folders = [name for base in (pp.root / "takes", pp.analysis_dir / "units") if base.is_dir()
+               for name in (p.name for p in base.iterdir() if p.is_dir())]
+    return _highest(_UNIT_ID, [*_ids(plans, "units"), *folders]) + 1
+
+
+def _archive(root: Path, data: dict) -> Path:
+    number = max((n for n, _ in _archives(root)), default=0) + 1
+    path = Path(root) / "plans" / f"plan-{number:04d}.json"
+    while path.exists():
+        number += 1
+        path = Path(root) / "plans" / f"plan-{number:04d}.json"
+    write_json(path, data)
+    return path
+
+
 # --- build ---------------------------------------------------------------------------------
 
 def build(root: Path, *, model: str, method: str, batch: str, quality: str = "draft",
           max_unit_seconds: float | None = None, replace: bool = False) -> dict:
     """Pack the shots into units, write each unit's reference clip and plan.json with one
-    planned job per unit. Returns the plan. Nothing is written when a check refuses."""
+    planned job per unit. Returns the plan. Nothing is written when a check refuses.
+
+    With replace, the current plan is archived under plans/ and new unit and job ids follow every
+    id used before; refused while a job of the current plan is issued and not finished.
+    """
     root = Path(root)
     pp = ProjectPaths(root)
     project = load_project(root)
@@ -252,14 +317,17 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         raise CineRecastError("batch must not be empty")
     if max_unit_seconds is not None and (not _is_number(max_unit_seconds) or max_unit_seconds <= 0):
         raise CineRecastError(f"max_unit_seconds must be a number greater than 0: {max_unit_seconds!r}")
+    current = None
     if pp.plan_file.exists():
         if not replace:
-            raise CineRecastError("plan.json already exists; rebuild it with replace (--replace), "
-                                  "which is allowed only while no job has been issued")
-        issued = [str(j.get("id")) if isinstance(j, dict) else repr(j) for j in load(root)["jobs"]
-                  if not isinstance(j, dict) or j.get("state") not in _UNISSUED]
-        if issued:
-            raise CineRecastError(f"cannot replace the plan: jobs already issued: {', '.join(issued)}")
+            raise CineRecastError("plan.json already exists; rebuild it with replace (--replace), which "
+                                  "archives the current plan under plans/")
+        current = load(root)
+        open_jobs = [str(j.get("id")) if isinstance(j, dict) else repr(j) for j in current["jobs"]
+                     if not isinstance(j, dict) or j.get("state") not in (*_UNISSUED, "done", "failed")]
+        if open_jobs:
+            raise CineRecastError(f"cannot replace the plan: jobs issued and not finished: {', '.join(open_jobs)}; "
+                                  "record them with jobs done or jobs fail first")
 
     problems = casting.check(root)
     if problems:
@@ -294,8 +362,9 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
 
     resolution = _resolution(spec, quality)  # the unit's default; each job's quality decides what is sent
     aspect_ratio = _closest_aspect(spec, box.aspect)
+    first_unit = _next_unit_number(root, current)
     units: list[dict] = []
-    for number, group in enumerate(groups, start=1):
+    for number, group in enumerate(groups, start=first_unit):
         uid = f"u{number:02d}"
         start, end = group[0].start, group[-1].end
         shots = [shot.index for shot in group]
@@ -318,109 +387,20 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
                        "aspect_ratio": aspect_ratio, "resolution": resolution},
             "prompt": "", "inputs": inputs, "qc_skip": [], "selected_take": None,
         })
+    first_job = _next_job_number(root, current)
+    jobs = [_new_job(f"j{n:04d}", item["id"], batch, quality) for n, item in enumerate(units, start=first_job)]
 
-    units_dir = pp.analysis_dir / "units"
-    if units_dir.exists():
-        shutil.rmtree(units_dir)
     reference = root / project["reference"]
-    for item in units:
+    for item in units:          # new unit ids, so earlier reference clips are never touched
         cut_frames(reference, item["start"], item["end"], pp.unit_dir(item["id"]) / "ref.mp4", crop=box.as_crop())
-    data = {"units": units,
-            "jobs": [_new_job(f"j{n:04d}", item["id"], batch, quality) for n, item in enumerate(units, start=1)]}
+    if current is not None:
+        _archive(root, current)
+    data = {"units": units, "jobs": jobs}
     _save(root, data)
     return data
 
 
-# --- check ---------------------------------------------------------------------------------
-
-def check(root: Path) -> list[str]:
-    """Problems that keep the plan's jobs from being issued. An empty list means it is ready."""
-    root = Path(root)
-    data = load(root)
-    problems = check_models(root)
-    models = {} if problems else _models_by_id(root)
-    for position, item in enumerate(data["units"]):
-        if not isinstance(item, dict):
-            problems.append(f"units[{position}] must be an object.")
-            continue
-        label = f"unit {item.get('id')}" if _is_text(item.get("id")) else f"units[{position}]"
-        prompt = item.get("prompt")
-        if not isinstance(prompt, str) or not is_english_prompt(prompt):
-            problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
-        inputs = item.get("inputs")
-        if not isinstance(inputs, list) or not inputs:
-            problems.append(f"{label}: inputs must be a non-empty list.")
-        else:
-            for entry in inputs:
-                path = entry.get("path") if isinstance(entry, dict) else None
-                if not _is_text(path):
-                    problems.append(f"{label}: every input needs a role and a path.")
-                elif not _resolve(root, path).is_file():
-                    problems.append(f"{label}: input file not found: {path}")
-        if not models:
-            continue  # models.json problems are already listed
-        spec = models.get(item.get("model"))
-        if spec is None:
-            problems.append(f"{label}: model {item.get('model')!r} is not in models.json.")
-            continue
-        params = item.get("params") if isinstance(item.get("params"), dict) else {}
-        duration, top = params.get("duration"), math.ceil(spec["max_seconds"])
-        if not _is_number(duration) or not (spec["min_seconds"] <= duration <= top):
-            problems.append(f"{label}: duration {duration!r} is outside the limits of model "
-                            f"{spec['id']!r} ({spec['min_seconds']} to {top} s).")
-        if params.get("aspect_ratio") not in spec["aspect_ratios"]:
-            problems.append(f"{label}: aspect_ratio {params.get('aspect_ratio')!r} is not offered by model "
-                            f"{spec['id']!r} ({', '.join(spec['aspect_ratios'])}).")
-        if params.get("resolution") not in spec["resolutions"]:
-            problems.append(f"{label}: resolution {params.get('resolution')!r} is not offered by model "
-                            f"{spec['id']!r} ({', '.join(spec['resolutions'])}).")
-    for position, job in enumerate(data["jobs"]):
-        if not isinstance(job, dict):
-            problems.append(f"jobs[{position}] must be an object.")
-            continue
-        try:
-            payload = _payload(root, data, models, job) if models else None
-        except CineRecastError as exc:
-            problems.append(exc.message)
-            continue
-        if payload is not None:
-            spec = models[payload["params"]["model"]]
-            if payload["params"]["resolution"] not in spec["resolutions"]:
-                problems.append(f"job {job.get('id')}: resolution {payload['params']['resolution']!r} is not "
-                                f"offered by model {spec['id']!r}.")
-    return problems
-
-
-# --- jobs ----------------------------------------------------------------------------------
-
-def add_job(root: Path, unit_id: str, batch: str, quality: str) -> dict:
-    """Add a planned job for a unit (a retry or another quality) and return it."""
-    data = load(root)
-    _find_unit(data, unit_id)
-    if quality not in QUALITIES:
-        raise CineRecastError(f"unknown quality {quality!r}; expected one of {', '.join(QUALITIES)}")
-    if not _is_text(batch):
-        raise CineRecastError("batch must not be empty")
-    number = max((_job_number(j)[0] for j in data["jobs"] if isinstance(j, dict)), default=0)
-    job = _new_job(f"j{max(number, 0) + 1:04d}", unit_id, batch, quality)
-    data["jobs"].append(job)
-    _save(root, data)
-    return job
-
-
-def set_cost(root: Path, job_id: str, credits: float) -> dict:
-    """Record the quoted cost of a planned or quoted job; the job becomes quoted."""
-    data = load(root)
-    job = _find_job(data, job_id)
-    if job.get("state") not in _UNISSUED:
-        raise CineRecastError(f"job {job_id} is {job.get('state')}; its quote can no longer change")
-    if not _is_number(credits) or credits <= 0:
-        raise CineRecastError(f"job {job_id}: credits must be a finite number greater than 0: {credits!r}")
-    job["est_credits"] = float(credits)
-    job["state"] = "quoted"
-    _save(root, data)
-    return job
-
+# --- payloads and quotes -------------------------------------------------------------------
 
 def _payload(root: Path, data: dict, models: dict[str, dict], job: dict) -> dict:
     """The exact call for one job: tool, parameters and absolute input paths.
@@ -450,21 +430,136 @@ def _payload(root: Path, data: dict, models: dict[str, dict], job: dict) -> dict
     }
 
 
-def job_payload(root: Path, job_id: str) -> dict:
-    """The call a job makes when issued, in the shape of an issue_next item. Quote exactly this."""
+def _digest(payload: dict) -> str:
+    """Fingerprint of what a quote priced: every param but the prompt, and the medias as (role, path).
+
+    The prompt is left out on purpose: it does not change the price.
+    """
+    priced = {"params": {k: v for k, v in payload["params"].items() if k != "prompt"},
+              "medias": [[m["role"], m["path"]] for m in payload["medias"]]}
+    return hashlib.sha256(json.dumps(priced, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _stale_quote(job: dict, payload: dict) -> str | None:
+    if job.get("quote_digest") == _digest(payload):
+        return None
+    return (f"job {job.get('id')}: its parameters or inputs changed since it was quoted; "
+            "quote it again with jobs set-cost")
+
+
+# --- check ---------------------------------------------------------------------------------
+
+def check(root: Path) -> list[str]:
+    """Problems that keep the plan's jobs from being issued. An empty list means it is ready."""
     root = Path(root)
     data = load(root)
-    return _payload(root, data, _valid_models(root), _find_job(data, job_id))
+    problems = check_models(root)
+    models = {} if problems else _models_by_id(root)
+    for position, item in enumerate(data["units"]):
+        if not isinstance(item, dict):
+            problems.append(f"units[{position}] must be an object.")
+            continue
+        label = f"unit {item.get('id')}" if _is_text(item.get("id")) else f"units[{position}]"
+        prompt = item.get("prompt")
+        if not isinstance(prompt, str) or not is_english_prompt(prompt):
+            problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
+        inputs = item.get("inputs")
+        if not isinstance(inputs, list) or not inputs:
+            problems.append(f"{label}: inputs must be a non-empty list.")
+        else:
+            for entry in inputs:
+                path = entry.get("path") if isinstance(entry, dict) else None
+                if not _is_text(path):
+                    problems.append(f"{label}: every input needs a role and a path.")
+                    continue
+                if entry.get("role") not in ROLES:
+                    problems.append(f"{label}: input {path} needs the role 'video' or 'image', "
+                                    f"not {entry.get('role')!r}.")
+                if not _resolve(root, path).is_file():
+                    problems.append(f"{label}: input file not found: {path}")
+        if not models:
+            continue  # models.json problems are already listed
+        spec = models.get(item.get("model"))
+        if spec is None:
+            problems.append(f"{label}: model {item.get('model')!r} is not in models.json.")
+            continue
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        duration, top = params.get("duration"), math.ceil(spec["max_seconds"])
+        if not _is_number(duration) or not (spec["min_seconds"] <= duration <= top):
+            problems.append(f"{label}: duration {duration!r} is outside the limits of model "
+                            f"{spec['id']!r} ({spec['min_seconds']} to {top} s).")
+        if params.get("aspect_ratio") not in spec["aspect_ratios"]:
+            problems.append(f"{label}: aspect_ratio {params.get('aspect_ratio')!r} is not offered by model "
+                            f"{spec['id']!r} ({', '.join(spec['aspect_ratios'])}).")
+        if params.get("resolution") not in spec["resolutions"]:
+            problems.append(f"{label}: resolution {params.get('resolution')!r} is not offered by model "
+                            f"{spec['id']!r} ({', '.join(spec['resolutions'])}).")
+    for position, job in enumerate(data["jobs"]):
+        if not isinstance(job, dict):
+            problems.append(f"jobs[{position}] must be an object.")
+            continue
+        if not models:
+            continue
+        try:
+            payload = _payload(root, data, models, job)
+        except CineRecastError as exc:
+            problems.append(exc.message)
+            continue
+        if job.get("state") == "quoted":
+            stale = _stale_quote(job, payload)
+            if stale:
+                problems.append(stale)
+    return problems
+
+
+# --- jobs ----------------------------------------------------------------------------------
+
+def add_job(root: Path, unit_id: str, batch: str, quality: str) -> dict:
+    """Add a planned job for a unit (a retry or another quality) and return it."""
+    root = Path(root)
+    data = load(root)
+    _find_unit(data, unit_id)
+    if quality not in QUALITIES:
+        raise CineRecastError(f"unknown quality {quality!r}; expected one of {', '.join(QUALITIES)}")
+    if not _is_text(batch):
+        raise CineRecastError("batch must not be empty")
+    job = _new_job(f"j{_next_job_number(root, data):04d}", unit_id, batch, quality)
+    data["jobs"].append(job)
+    _save(root, data)
+    return job
+
+
+def set_cost(root: Path, job_id: str, credits: float) -> dict:
+    """Record the quoted cost of a planned or quoted job and bind it to the job's current payload.
+
+    The job becomes quoted. A new quote replaces the estimate and the binding at any time before
+    the job is issued.
+    """
+    root = Path(root)
+    data = load(root)
+    job = _find_job(data, job_id)
+    if job.get("state") not in _UNISSUED:
+        raise CineRecastError(f"job {job_id} is {job.get('state')}; its quote can no longer change")
+    if not _is_number(credits) or credits <= 0:
+        raise CineRecastError(f"job {job_id}: credits must be a finite number greater than 0: {credits!r}")
+    payload = _payload(root, data, _valid_models(root), job)
+    job["est_credits"] = float(credits)
+    job["quote_digest"] = _digest(payload)
+    job["state"] = "quoted"
+    _save(root, data)
+    return job
 
 
 def list_jobs(root: Path) -> list[dict]:
-    """Every job with its state, batch, quality, estimate and the params it will be sent with."""
+    """Every job with its state, batch, quality and estimate, and its params: the params it was
+    sent with once issued, the params it would be sent with before that."""
     root = Path(root)
     data = load(root)
     models = _valid_models(root)
     return [{"id": job.get("id"), "unit": job.get("unit"), "batch": job.get("batch"), "quality": job.get("quality"),
              "state": job.get("state"), "est_credits": job.get("est_credits"),
-             "params": _payload(root, data, models, job)["params"]}
+             "params": job.get("sent_params") if job.get("state") in _SENT
+             else _payload(root, data, models, job)["params"]}
             for job in data["jobs"] if isinstance(job, dict)]
 
 
@@ -472,8 +567,8 @@ def issue_next(root: Path, batch: str) -> list[dict]:
     """Hand the batch's quoted jobs to the ledger in job order and return what to run for each.
 
     Requires a clean casting check (rights are read again at the moment of spending) and a clean
-    plan check. Stops with CineRecastError at the first job the ledger refuses; the jobs issued
-    before it stay issued.
+    plan check. Each job must still have the payload its quote priced. Stops with IssueRefused at
+    the first job refused; the jobs issued before it stay issued and travel on the exception.
     """
     root = Path(root)
     problems = casting.check(root)
@@ -488,16 +583,24 @@ def issue_next(root: Path, batch: str) -> list[dict]:
                     if isinstance(j, dict) and j.get("batch") == batch and j.get("state") == "quoted"),
                    key=_job_number)
     issued: list[dict] = []
+
+    def refused(job: dict, reason: str) -> IssueRefused:
+        before = f" (issued before it in this call: {', '.join(p['job_id'] for p in issued)})" if issued else ""
+        return IssueRefused(f"job {job['id']} was not issued: {reason}{before}", issued)
+
     for job in queue:
-        execution = _payload(root, data, models, job)
+        payload = _payload(root, data, models, job)
+        stale = _stale_quote(job, payload)
+        if stale:
+            raise refused(job, stale)
         try:
             ledger.issue(root, job["id"], batch, job.get("est_credits"))
         except CineRecastError as exc:
-            before = f" (issued before it in this call: {', '.join(e['job_id'] for e in issued)})" if issued else ""
-            raise CineRecastError(f"job {job['id']} was not issued: {exc.message}{before}") from exc
+            raise refused(job, exc.message) from exc
         job["state"] = "issued"
+        job["sent_params"] = payload["params"]
         _save(root, data)
-        issued.append(execution)
+        issued.append(payload)
     return issued
 
 
@@ -532,12 +635,14 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     root = Path(root)
     data = load(root)
     job = _find_job(data, job_id)
-    if job.get("state") == "done" and _is_text(job.get("unit")) and not _job_has_take(root, job["unit"], job_id):
+    unit_id = job.get("unit")
+    in_plan = any(isinstance(u, dict) and u.get("id") == unit_id for u in data["units"])
+    if ledger.job_states(root).get(job_id) == "done" and in_plan and not _job_has_take(root, unit_id, job_id):
         raise CineRecastError(
             f"job {job_id} is already done in the ledger but no take was stored for it; register the "
             "file again with a new job: jobs add, then jobs set-cost, jobs next and jobs done")
     job = _issued_job(data, job_id)
-    _find_unit(data, job.get("unit"))
+    _find_unit(data, unit_id)
     if not _is_text(provider_id):
         raise CineRecastError(f"job {job_id}: provider_id must not be empty")
     if not _is_number(credits) or credits < 0:
@@ -545,18 +650,18 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     source = Path(file)
     if not source.is_file():
         raise CineRecastError(f"job {job_id}: result file not found: {source}")
-    take = new_take(root, job["unit"], source, {
+    take = new_take(root, unit_id, source, {
         "job": job_id, "provider_id": provider_id, "credits": float(credits),
         "quality": job.get("quality"), "recorded_at": _now(),
     })
     try:
         ledger.done(root, job_id, provider_id, credits)
     except BaseException:
-        shutil.rmtree(ProjectPaths(root).take_dir(job["unit"], take), ignore_errors=True)
+        shutil.rmtree(ProjectPaths(root).take_dir(unit_id, take), ignore_errors=True)
         raise
     job["state"] = "done"
     _save(root, data)
-    return {"unit": job["unit"], "take": take}
+    return {"unit": unit_id, "take": take}
 
 
 def record_fail(root: Path, job_id: str, reason: str, credits: float = 0.0) -> dict:

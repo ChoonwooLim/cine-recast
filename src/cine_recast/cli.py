@@ -111,7 +111,13 @@ def _cmd_jobs_set_cost(args: argparse.Namespace) -> int:
 
 
 def _cmd_jobs_next(args: argparse.Namespace) -> int:
-    _print_json(plan.issue_next(Path(args.project), args.batch))
+    try:
+        issued = plan.issue_next(Path(args.project), args.batch)
+    except plan.IssueRefused as exc:
+        _print_json(exc.issued)  # jobs issued before the refusal must reach the agent
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 2
+    _print_json(issued)
     return 0
 
 

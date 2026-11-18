@@ -1,8 +1,9 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
-from conftest import set_prompt, write_models
+from conftest import GOOD_PROMPT, set_prompt, write_models
 
 from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
@@ -12,10 +13,10 @@ from cine_recast.ledger import approve, audit, batch_status
 from cine_recast.ledger import done as ledger_done
 from cine_recast.ledger import fail as ledger_fail
 from cine_recast.ledger import issue as ledger_issue
-from cine_recast.plan import (add_job, build, check, check_models, issue_next, job_payload, load, record_done,
+from cine_recast.plan import (add_job, build, check, check_models, issue_next, list_jobs, load, record_done,
                               record_fail, set_cost)
 from cine_recast.project import set_right
-from cine_recast.takes import list_takes
+from cine_recast.takes import list_takes, select
 
 
 def test_units_are_packed_by_model_limit(cast3):
@@ -321,20 +322,21 @@ def test_cli_job_flow(planned3, clip3, capsys):
 def test_resolution_follows_the_job_quality(planned3, capsys):
     root = planned3.root
     assert main(["jobs", "add", str(root), "--unit", "u01", "--batch", "b", "--quality", "final"]) == 0
-    draft, final = job_payload(root, "j0001"), job_payload(root, "j0002")
-    assert draft["params"]["resolution"] == "480p" and final["params"]["resolution"] == "4k"
-    assert {**final["params"], "resolution": "480p"} == draft["params"] and final["medias"] == draft["medias"]
-    assert load(root)["units"][0]["params"]["resolution"] == "480p"          # build's default stays in the unit
     capsys.readouterr()
     assert main(["jobs", "list", str(root)]) == 0
     listed = json.loads(capsys.readouterr().out)
-    assert [(j["id"], j["state"], j["batch"], j["quality"], j["est_credits"], j["params"]) for j in listed] == [
-        ("j0001", "planned", "b", "draft", None, draft["params"]),
-        ("j0002", "planned", "b", "final", None, final["params"])]
+    draft, final = listed[0]["params"], listed[1]["params"]
+    assert draft["resolution"] == "480p" and final["resolution"] == "4k"
+    assert {**final, "resolution": "480p"} == draft
+    assert load(root)["units"][0]["params"]["resolution"] == "480p"          # build's default stays in the unit
+    assert [(j["id"], j["state"], j["batch"], j["quality"], j["est_credits"]) for j in listed] == [
+        ("j0001", "planned", "b", "draft", None), ("j0002", "planned", "b", "final", None)]
     for job in ("j0001", "j0002"):
         set_cost(root, job, 10.0)
     approve(root, "b", 20.0, "owner")
-    assert issue_next(root, "b") == [draft, final]                           # what is quoted is what is sent
+    sent = issue_next(root, "b")
+    assert [p["params"] for p in sent] == [draft, final]                    # what is quoted is what is sent
+    assert sent[1]["medias"] == sent[0]["medias"]
 
 
 @pytest.mark.parametrize("mutate, fragment", [
@@ -415,3 +417,164 @@ def test_done_job_without_a_take_points_to_a_new_job(planned3, clip3):
     with pytest.raises(CineRecastError) as refused:
         record_done(root, j2, "prov-2", 9.0, clip3)            # done with a take: no hint, no new folder
     assert "jobs add" not in refused.value.message and list_takes(root, "u01") == ["t001"]
+
+
+# --- fix round 1: quotes bound to payloads, ids never reused, small items ---
+
+def _edit_unit(pp, mutate, index=0):
+    data = read_json(pp.plan_file)
+    mutate(data["units"][index])
+    write_json(pp.plan_file, data)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda u: u["params"].update(duration=15),                          # still within the model limits
+    lambda u: u["params"].update(aspect_ratio="21:9"),
+    lambda u: u["inputs"].append(dict(u["inputs"][1])),                 # one more input image
+])
+def test_quote_is_bound_to_the_priced_payload(planned3, mutate):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    _edit_unit(planned3, mutate)
+    assert any("j0001" in p and "set-cost" in p for p in check(root))
+    before = planned3.ledger_file.read_text(encoding="utf-8")
+    with pytest.raises(CineRecastError, match="set-cost"):
+        issue_next(root, "b")
+    assert planned3.ledger_file.read_text(encoding="utf-8") == before
+    set_cost(root, "j0001", 12.0)                                       # a new quote, after the approval
+    assert issue_next(root, "b")[0]["job_id"] == "j0001" and batch_status(root, "b")["committed"] == 12.0
+
+
+def test_prompt_change_keeps_the_quote(planned3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    set_prompt(root, "u01", "Replace the rider with the person in image 1.")
+    assert check(root) == []
+    assert issue_next(root, "b")[0]["params"]["prompt"] == "Replace the rider with the person in image 1."
+
+
+def test_jobs_list_shows_sent_params_once_issued(planned3, clip3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    [sent] = issue_next(root, "b")
+    add_job(root, "u01", "b", "draft")
+    _edit_unit(planned3, lambda u: u["params"].update(duration=15))
+    listed = {j["id"]: j for j in list_jobs(root)}
+    assert listed["j0001"]["params"] == sent["params"] and listed["j0002"]["params"]["duration"] == 15
+    record_done(root, "j0001", "prov-1", 10.0, clip3)
+    assert {j["id"]: j for j in list_jobs(root)}["j0001"]["params"] == sent["params"]
+
+
+def test_replan_archives_the_plan_and_never_reuses_ids(planned3, clip3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+    record_done(root, "j0001", "prov-1", 10.0, clip3)
+    p = build(root, model="seedance_2_5", method="regen", batch="b", replace=True)
+    assert [u["id"] for u in p["units"]] == ["u02"] and [j["id"] for j in p["jobs"]] == ["j0002"]
+    assert read_json(root / "plans" / "plan-0001.json")["jobs"][0]["state"] == "done"
+    assert (planned3.unit_dir("u01") / "ref.mp4").is_file() and (planned3.unit_dir("u02") / "ref.mp4").is_file()
+    assert [(j["id"], j["state"], j["est_credits"]) for j in load(root)["jobs"]] == [("j0002", "planned", None)]
+    with pytest.raises(CineRecastError, match="u01"):
+        select(root, "u01", "t001")                                     # a take of a unit no longer planned
+    assert add_job(root, "u02", "b", "final")["id"] == "j0003"
+    build(root, model="seedance_2_5", method="edit", batch="b", replace=True)
+    assert (root / "plans" / "plan-0002.json").is_file()
+    assert [u["id"] for u in load(root)["units"]] == ["u03"] and [j["id"] for j in load(root)["jobs"]] == ["j0004"]
+
+
+def test_ids_continue_after_a_hand_deleted_plan(planned3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+    planned3.plan_file.unlink()
+    p = build(root, model="seedance_2_5", method="edit", batch="b")
+    assert [u["id"] for u in p["units"]] == ["u02"]
+    assert [(j["id"], j["state"]) for j in load(root)["jobs"]] == [("j0002", "planned")]
+    assert set_cost(root, "j0002", 10.0)["state"] == "quoted"
+
+
+def test_done_without_take_guard_reads_the_ledger(planned3, clip3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+    data = read_json(planned3.plan_file)
+    data["jobs"][0]["state"] = "done"                                   # the plan claims done, the ledger does not
+    write_json(planned3.plan_file, data)
+    with pytest.raises(CineRecastError) as refused:
+        record_done(root, "j0001", "prov-1", 9.0, clip3)
+    assert "jobs add" not in refused.value.message and list_takes(root, "u01") == []
+
+
+def _two_jobs_over_the_limit(root):
+    j2 = add_job(root, "u01", "b", "draft")["id"]
+    set_cost(root, "j0001", 30.0); set_cost(root, j2, 30.0); approve(root, "b", 50.0, "owner")
+    return j2
+
+
+def test_refusal_carries_the_jobs_already_issued(planned3):
+    _two_jobs_over_the_limit(planned3.root)
+    with pytest.raises(CineRecastError, match="limit") as refused:
+        issue_next(planned3.root, "b")
+    assert [p["job_id"] for p in refused.value.issued] == ["j0001"]
+
+
+def test_cli_prints_jobs_issued_before_a_refusal(planned3, capsys):
+    j2 = _two_jobs_over_the_limit(planned3.root)
+    capsys.readouterr()
+    assert main(["jobs", "next", str(planned3.root), "--batch", "b"]) == 2
+    out = capsys.readouterr()
+    assert [j["job_id"] for j in json.loads(out.out)] == ["j0001"] and j2 in out.err and "limit" in out.err
+
+
+@pytest.mark.parametrize("mutate", [lambda e: e.update(role="audio"), lambda e: e.pop("role")])
+def test_check_refuses_an_input_without_a_valid_role(planned3, mutate):
+    _edit_unit(planned3, lambda u: mutate(u["inputs"][1]))
+    assert any("u01" in p and "role" in p for p in check(planned3.root))
+
+
+def test_relative_swap_image_resolves_against_the_project(cast3, tmp_path, monkeypatch):
+    root = cast3.root
+    casting = read_json(cast3.casting_file)
+    local = root / "refs" / "hero.png"
+    local.parent.mkdir()
+    shutil.copyfile(casting["swaps"][0]["images"][0], local)
+    casting["swaps"][0]["images"] = ["refs/hero.png"]
+    write_json(cast3.casting_file, casting)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    write_models(root)
+    unit = build(root, model="seedance_2_5", method="edit", batch="b")["units"][0]
+    assert unit["inputs"][1] == {"role": "image", "path": "refs/hero.png", "element": "hero"}
+    set_prompt(root, "u01", GOOD_PROMPT)
+    set_cost(root, "j0001", 10.0); approve(root, "b", 10.0, "owner")
+    [job] = issue_next(root, "b")
+    assert Path(job["medias"][1]["path"]) == local.resolve()
+
+
+def test_flow_in_a_folder_with_hangul_and_a_space(_cast3_template, tmp_path, clip3, capsys):
+    root = tmp_path / "\uc7ac\uc81c\uc791 \ud504\ub85c\uc81d\ud2b8"
+    shutil.copytree(_cast3_template, root)
+    write_models(root)
+    r = str(root)
+    assert main(["plan", "build", r, "--model", "seedance_2_5", "--method", "edit", "--batch", "b"]) == 0
+    set_prompt(root, "u01", GOOD_PROMPT)
+    assert main(["jobs", "set-cost", r, "--job", "j0001", "--credits", "10"]) == 0
+    assert main(["approve", r, "--batch", "b", "--limit", "10", "--by", "owner"]) == 0
+    capsys.readouterr()
+    assert main(["jobs", "next", r, "--batch", "b"]) == 0
+    [job] = json.loads(capsys.readouterr().out)
+    assert "\ud504\ub85c\uc81d\ud2b8" in job["medias"][0]["path"] and all(Path(m["path"]).is_file() for m in job["medias"])
+    assert main(["jobs", "done", r, "--job", "j0001", "--provider-id", "prov-1", "--credits", "10",
+                 "--file", str(clip3)]) == 0
+    assert (root / "takes" / "u01" / "t001" / "raw.mp4").is_file() and audit(root)["ok"] is True
+
+
+def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
+    import cine_recast.plan as plan_module
+
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    _edit_unit(planned3, lambda u: u["params"].update(duration=15))
+    monkeypatch.setattr(plan_module, "check", lambda r: [])            # the gate holds even without check
+    with pytest.raises(CineRecastError, match="set-cost") as refused:
+        issue_next(root, "b")
+    assert refused.value.issued == [] and batch_status(root, "b")["committed"] == 0.0

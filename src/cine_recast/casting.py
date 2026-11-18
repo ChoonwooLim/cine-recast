@@ -127,7 +127,7 @@ def check(root: Path) -> list[str]:
             path = Path(image) if isinstance(image, str) else None
             if path is None or path.suffix.lower() not in IMAGE_SUFFIXES:
                 problems.append(f"{label}: image {image!r} must be a .jpg, .jpeg, .png or .webp file.")
-            elif not path.is_file():
+            elif not (root / path).is_file():  # a relative path is relative to the project folder
                 problems.append(f"{label}: image file not found: {image}")
 
     if "person" in swapped_kinds and _answer(rights, "likeness_consent") != "yes":

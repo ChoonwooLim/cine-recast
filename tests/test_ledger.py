@@ -2,7 +2,7 @@ import pytest
 
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import append_jsonl
-from cine_recast.ledger import approve, audit, batch_status, done, fail, issue
+from cine_recast.ledger import approve, audit, batch_status, done, fail, issue, job_states
 from cine_recast.paths import ProjectPaths
 
 
@@ -153,3 +153,17 @@ def test_unicode_line_separators_in_text_do_not_break_the_ledger(tmp_path, char)
     fail(tmp_path, "j1", f"x{char}y")
     report = audit(tmp_path)
     assert report["ok"] is True and report["problems"] == []
+
+
+def test_job_states(tmp_path):
+    assert job_states(tmp_path) == {}
+    approve(tmp_path, "b", 100.0, "owner")
+    for job in ("j1", "j2", "j3"):
+        issue(tmp_path, job, "b", 10.0)
+    done(tmp_path, "j1", "p", 1.0); fail(tmp_path, "j2", "r")
+    assert job_states(tmp_path) == {"j1": "done", "j2": "failed", "j3": "issued"}
+    _raw(tmp_path, '{"type": "job_done", "time": "x", "job_id": "j2", "provider_id": "p", "credits": 1.0}\n')
+    assert job_states(tmp_path)["j2"] == "failed"                     # the first finish wins
+    _raw(tmp_path, '[1, 2]\n')
+    with pytest.raises(CineRecastError, match="damaged"):
+        job_states(tmp_path)

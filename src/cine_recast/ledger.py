@@ -128,11 +128,13 @@ def _state(events: list[dict]) -> tuple[dict[str, float], dict[str, dict]]:
         if kind == "approval":
             limits[ev["batch"]] = limits.get(ev["batch"], 0.0) + float(ev["limit_credits"])
         elif kind == "job_issued":
-            jobs.setdefault(ev["job_id"], {"batch": ev["batch"], "est": float(ev["est_credits"]), "actual": None})
+            jobs.setdefault(ev["job_id"], {"batch": ev["batch"], "est": float(ev["est_credits"]),
+                                           "actual": None, "finish": None})
         elif kind in ("job_done", "job_failed"):
             job = jobs.get(ev["job_id"])
             if job is not None and job["actual"] is None:
                 job["actual"] = float(ev["credits"])
+                job["finish"] = "done" if kind == "job_done" else "failed"
     return limits, jobs
 
 
@@ -199,6 +201,15 @@ def fail(root: Path, job_id: str, reason: str, credits: float = 0.0) -> dict:
 def batch_status(root: Path, batch: str) -> dict:
     limits, jobs = _state(_events(root))
     return _status(limits, jobs, batch)
+
+
+def job_states(root: Path) -> dict[str, str]:
+    """Job id -> "issued", "done" or "failed" for every issued job (first issue and first finish win).
+
+    Fails closed like batch_status: a damaged ledger raises CineRecastError.
+    """
+    _, jobs = _state(_events(root))
+    return {job_id: job["finish"] or "issued" for job_id, job in jobs.items()}
 
 
 def audit(root: Path) -> dict:
