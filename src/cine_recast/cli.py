@@ -647,9 +647,11 @@ def _build_parser() -> argparse.ArgumentParser:
     extra_add.add_argument("--direction", choices=extras.DIRECTIONS, default=None,
                            help="backward: the new clip ends where the take begins; forward: it starts where the "
                                 "take ends")
-    extra_add.add_argument("--start", default=None, help="first frame of the new clip, U/T:FRAME (FRAME is first, "
-                                                         "last or a frame number of the take's raw file)")
-    extra_add.add_argument("--end", default=None, help="last frame of the new clip, U/T:FRAME")
+    extra_add.add_argument("--start", default=None, help="first frame of the new clip: a take frame U/T:FRAME (FRAME "
+                                                         "is first, last or a frame number of the take's raw file) "
+                                                         "or an image under assets/ or swap/")
+    extra_add.add_argument("--end", default=None, help="last frame of the new clip: U/T:FRAME or an image under "
+                                                       "assets/ or swap/")
     extra_add.add_argument("--ref", action="append", help="reference image under assets/ or swap/ (repeatable)")
     extra_add.add_argument("--quality", choices=plan.QUALITIES, default="draft",
                            help="draft: the model's first resolution, final: its last")

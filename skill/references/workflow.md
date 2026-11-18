@@ -39,7 +39,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   sounds.json                       sound add, set-cost, next, done, fail, set
   sounds/s0001.wav                  sound done (생성된 소리)
   extras.json                       extra add, set-cost, next, done, fail
-  extras/x0001/start.png, end.png   extra add (--start, --end로 준 테이크 프레임)
+  extras/x0001/start.png, end.png   extra add (--start, --end로 준 테이크 프레임이나 이미지의 PNG)
   extras/x0001/take.mp4             extra done (원본에 없는 숏의 결과)
   ledger.jsonl                      budget set, approve, jobs next, jobs done, jobs fail, assets next, assets done,
                                     assets fail, sound next, sound done, sound fail
@@ -554,7 +554,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--label`: 짧은 이름. 한국어도 되고 한자는 안 된다. `--prompt`: 영어(단위 프롬프트와 같은 규칙).
 - `--model`: `models.json`의 영상 모델. `--seconds`: 모델의 `min_seconds`에서 `max_seconds` 사이의 정수.
 - `--extend U/T`와 `--direction backward|forward`: 테이크 `takes/U/T/raw.*`를 늘린다. `backward`는 테이크의 첫 프레임 앞을, `forward`는 끝 프레임 뒤를 만든다. 테이크의 원본 파일이 역할 `video` 입력이 되고, 모델의 `video_ref`가 `true`여야 한다. `--direction`은 `--extend`와만 쓰고, `--extend`는 `--start`, `--end`와 함께 쓰지 않는다.
-- `--start U/T:FRAME`, `--end U/T:FRAME`: 새 클립의 첫 프레임과 끝 프레임. FRAME은 `first`, `last`, 또는 그 테이크 원본 파일의 프레임 번호(0부터)다. 도구가 그 프레임을 테이크의 크기 그대로 `extras/<id>/start.png`, `end.png`에 쓰고, 역할 `start_image`, `end_image` 입력으로 삼는다.
+- `--start`, `--end`: 새 클립의 첫 프레임과 끝 프레임. 테이크의 프레임(`U/T:FRAME`. FRAME은 `first`, `last`, 또는 그 테이크 원본 파일의 프레임 번호이고 0부터 센다)이나, `--ref`처럼 `assets/` 안의 생성 자료나 `swap/` 안의 이미지(생성한 첫 장면 그림 같은 것)를 준다. 도구가 테이크의 프레임은 테이크의 크기 그대로, 이미지는 PNG로 바꿔 `extras/<id>/start.png`, `end.png`에 쓰고, 역할 `start_image`, `end_image` 입력으로 삼는다. 견적은 이 파일의 내용에 묶인다.
 - `--ref`: 참조 이미지(여러 번 쓸 수 있다, 역할 `image`). 프로젝트의 `assets/` 안의 생성 자료나 `swap/` 안의 이미지만 받는다.
 - 입력은 하나도 없어도 된다(프롬프트만으로 만드는 숏). 테이크는 현재 계획이나 보관된 계획의 단위에 있어야 하고, 이미지 입력 수(`start`, `end`, `--ref`)는 모델의 `image_refs` 이하여야 한다.
 - `--quality`: `draft`(기본)는 모델의 첫 해상도, `final`은 마지막 해상도. `--aspect-ratio`: 생략하면 화면 영역에 가장 가까운 비율.

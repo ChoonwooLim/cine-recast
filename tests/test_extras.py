@@ -82,7 +82,6 @@ def test_add_with_reference_images(taken):
     (dict(extend="u01/t009", direction="backward"), "t009"),
     (dict(extend="u07/t001", direction="backward"), "u07"),
     (dict(start="u01/t001:500"), "500"),
-    (dict(start="u01/t001:middle"), "U/T:FRAME"),
     (dict(extend="u01/t001", direction="backward", start="u01/t001:first"), "--start"),
     (dict(extend="u01/t001"), "--direction"),
     (dict(direction="forward"), "--extend"),
@@ -286,6 +285,52 @@ def test_cli_flow(taken, result_clip, capsys):
     _add(root, extend="u01/t001", direction="forward", batch="x-2")
     extras.set_cost(root, "x0002", 5.0); approve(root, "x-2", 5.0, "owner"); extras.issue_next(root, "x-2")
     assert main(["extra", "fail", str(root), "--extra", "x0002", "--reason", "not submitted"]) == 0
+
+
+# --- start and end frames given as images under assets/ or swap/ ---
+
+def test_start_and_end_accept_images_from_assets_and_swap(taken):
+    root = taken.root
+    key = png(root / "assets" / "hero" / "a0001_1.png")
+    Image.new("RGB", (64, 36), (10, 200, 30)).save(key)
+    photo = root / "swap" / "last.jpg"
+    photo.parent.mkdir(parents=True)
+    Image.new("RGB", (64, 36), (200, 20, 40)).save(photo, quality=95)
+    item = extras.add(root, label="open", prompt=PROMPT, model="seedance_2_5", seconds=4, batch="x-1",
+                      start="assets/hero/a0001_1.png", end=str(photo))
+    folder = root / "extras" / "x0001"
+    assert item["inputs"] == [{"role": "start_image", "path": "extras/x0001/start.png"},
+                              {"role": "end_image", "path": "extras/x0001/end.png"}]
+    assert item["source"] == {"start": "assets/hero/a0001_1.png", "end": str(photo)}
+    assert (folder / "start.png").read_bytes() == key.read_bytes()            # a PNG is copied as it is
+    with Image.open(folder / "end.png") as end:                               # another type becomes PNG
+        assert end.format == "PNG" and end.size == (64, 36)
+        assert np.abs(np.asarray(end.convert("RGB")).astype(int) - (200, 20, 40)).max() <= 8
+    mixed = extras.add(root, label="mixed", prompt=PROMPT, model="seedance_2_5", seconds=4, batch="x-1",
+                       start="u01/t001:last", end="swap/last.jpg")
+    assert mixed["source"] == {"start": "u01/t001:last", "end": "swap/last.jpg"}
+
+
+@pytest.mark.parametrize("flag", ["start", "end"])
+def test_start_and_end_images_outside_assets_and_swap_are_refused(taken, tmp_path, flag):
+    root = taken.root
+    for value in (str(png(tmp_path / "outside.png")), str(png(root / "review" / "still.png")), "u01/t001:middle"):
+        with pytest.raises(CineRecastError, match="assets/.*swap/") as refused:
+            extras.add(root, label="x", prompt=PROMPT, model="seedance_2_5", seconds=4, batch="x-1",
+                       **{flag: value})
+        assert "U/T:FRAME" in refused.value.message
+    assert not (root / "extras.json").exists() and not (root / "extras").exists()
+
+
+def test_the_quote_covers_the_content_of_a_start_image(taken):
+    root = taken.root
+    png(root / "assets" / "hero" / "a0001_1.png")
+    extras.add(root, label="open", prompt=PROMPT, model="seedance_2_5", seconds=4, batch="x-1",
+               start="assets/hero/a0001_1.png")
+    extras.set_cost(root, "x0001", 10.0); approve(root, "x-1", 10.0, "owner")
+    Image.new("RGB", (8, 8), (0, 0, 255)).save(root / "extras" / "x0001" / "start.png")
+    with pytest.raises(CineRecastError, match="extra set-cost"):
+        extras.issue_next(root, "x-1")
 
 
 def test_this_file_keeps_han_as_an_escape():

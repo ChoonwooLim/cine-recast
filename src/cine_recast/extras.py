@@ -3,9 +3,9 @@ an ending), made to join an existing take.
 
 An extra is one video-generation call. To lead into or out of a shot it either extends a take
 (kind "extend": the take's raw file is the video input, the result continues it before its first
-frame, "backward", or after its last frame, "forward") or starts or ends on a frame of a take (kind
-"shot": the frame is written as extras/<id>/start.png or end.png when the extra is added); reference
-images from assets/ or swap/ may be added. Extras live in extras.json and follow the life cycle of
+frame, "backward", or after its last frame, "forward") or starts or ends on a given picture (kind
+"shot": a frame of a take, or an image under assets/ or swap/, written as extras/<id>/start.png or
+end.png when the extra is added); reference images from assets/ or swap/ may be added. Extras live in extras.json and follow the life cycle of
 the other paid jobs (lifecycle.py) through the same ledger, as sound items do:
 
 planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (record_done, record_fail)
@@ -27,6 +27,8 @@ planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (rec
 import re
 import shutil
 from pathlib import Path
+
+from PIL import Image
 
 from cine_recast import casting, ledger, plan
 from cine_recast.analyze import load_video
@@ -211,12 +213,20 @@ def _relative(root: Path, path: Path) -> str:
     return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
 
 
-def _frame_choice(root: Path, flag: str, text: str) -> tuple[Path, int]:
-    """(the take's raw file, the frame index) for --start or --end U/T:FRAME."""
+def _frame_choice(root: Path, flag: str, text: str) -> tuple[str, Path, int | None]:
+    """What --start or --end names: ("frame", the take's raw file, the frame index) for U/T:FRAME,
+    else ("image", the image file, None) for an image under assets/ or swap/."""
     match = _FRAME.fullmatch(text) if isinstance(text, str) else None
     if match is None:
-        raise CineRecastError(f"{flag} must be U/T:FRAME (for example u01/t001:first, u01/t001:last or "
-                              f"u01/t001:12), not {text!r}")
+        pp = ProjectPaths(Path(root))
+        path = resolve(root, str(text))
+        if (inside_folder(path, [pp.assets_dir, pp.root / "swap"]) is None
+                or path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file()):
+            raise CineRecastError(f"{flag} {text}: give a take frame as U/T:FRAME (for example u01/t001:first, "
+                                  "u01/t001:last or u01/t001:12) or an existing .jpg, .jpeg, .png or .webp image; "
+                                  "images must be generated asset files under assets/ or images under swap/ in the "
+                                  "project folder")
+        return "image", path, None
     raw = _take_raw(root, match.group(1), match.group(2))
     frames = probe(raw).frames
     choice = match.group(3)
@@ -224,7 +234,20 @@ def _frame_choice(root: Path, flag: str, text: str) -> tuple[Path, int]:
     if not 0 <= index < frames:
         raise CineRecastError(f"{flag}: frame {index} is outside take {match.group(1)}/{match.group(2)} "
                               f"(frames 0 to {frames - 1})")
-    return raw, index
+    return "frame", raw, index
+
+
+def _write_input_image(kind: str, source: Path, index: int | None, out: Path) -> None:
+    """Write extras/<id>/start.png or end.png: the exact frame of a take, or a copy of an image (a
+    PNG as it is, another type converted to PNG)."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "frame":
+        extract_still(source, index, out)
+    elif source.suffix.lower() == ".png":
+        shutil.copyfile(source, out)
+    else:
+        with Image.open(source) as image:
+            image.convert("RGB").save(out, format="PNG")
 
 
 def _ref_path(root: Path, ref) -> str:
@@ -302,8 +325,8 @@ def add(root: Path, *, label: str, prompt: str, model: str, seconds: int, batch:
     if problems:
         raise CineRecastError("; ".join(problems))
     try:
-        for name, (raw, index) in frames.items():
-            extract_still(raw, index, folder / f"{name}.png")
+        for name, (kind, path, index) in frames.items():
+            _write_input_image(kind, path, index, folder / f"{name}.png")
         data["extras"].append(item)
         _save(root, data)
     except BaseException:
