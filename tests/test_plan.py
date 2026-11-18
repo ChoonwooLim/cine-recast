@@ -9,8 +9,13 @@ from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import probe
 from cine_recast.jsonio import read_json, write_json
 from cine_recast.ledger import approve, audit, batch_status
-from cine_recast.plan import add_job, build, check, check_models, issue_next, load, record_done, record_fail, set_cost
+from cine_recast.ledger import done as ledger_done
+from cine_recast.ledger import fail as ledger_fail
+from cine_recast.ledger import issue as ledger_issue
+from cine_recast.plan import (add_job, build, check, check_models, issue_next, job_payload, load, record_done,
+                              record_fail, set_cost)
 from cine_recast.project import set_right
+from cine_recast.takes import list_takes
 
 
 def test_units_are_packed_by_model_limit(cast3):
@@ -309,3 +314,104 @@ def test_cli_job_flow(planned3, clip3, capsys):
         handle.write('{"type": "job_done", "time": "x", "job_id": "j0777", "provider_id": "p", "credits": 1.0}\n')
     assert main(["audit", root]) == 2
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+# --- rulings round: resolution by job quality, rights re-check, ledger-backed job state ---
+
+def test_resolution_follows_the_job_quality(planned3, capsys):
+    root = planned3.root
+    assert main(["jobs", "add", str(root), "--unit", "u01", "--batch", "b", "--quality", "final"]) == 0
+    draft, final = job_payload(root, "j0001"), job_payload(root, "j0002")
+    assert draft["params"]["resolution"] == "480p" and final["params"]["resolution"] == "4k"
+    assert {**final["params"], "resolution": "480p"} == draft["params"] and final["medias"] == draft["medias"]
+    assert load(root)["units"][0]["params"]["resolution"] == "480p"          # build's default stays in the unit
+    capsys.readouterr()
+    assert main(["jobs", "list", str(root)]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert [(j["id"], j["state"], j["batch"], j["quality"], j["est_credits"], j["params"]) for j in listed] == [
+        ("j0001", "planned", "b", "draft", None, draft["params"]),
+        ("j0002", "planned", "b", "final", None, final["params"])]
+    for job in ("j0001", "j0002"):
+        set_cost(root, job, 10.0)
+    approve(root, "b", 20.0, "owner")
+    assert issue_next(root, "b") == [draft, final]                           # what is quoted is what is sent
+
+
+@pytest.mark.parametrize("mutate, fragment", [
+    (lambda j: j.update(quality="best"), "quality"),
+    (lambda j: j.update(unit="u09"), "u09"),
+])
+def test_check_validates_every_job(planned3, mutate, fragment):
+    data = read_json(planned3.plan_file)
+    mutate(data["jobs"][0])
+    write_json(planned3.plan_file, data)
+    assert any("j0001" in p and fragment in p for p in check(planned3.root))
+
+
+def test_issue_rechecks_rights_at_hand_over(planned3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    before = planned3.ledger_file.read_text(encoding="utf-8")
+    set_right(root, "likeness_consent", "no")
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        issue_next(root, "b")
+    assert planned3.ledger_file.read_text(encoding="utf-8") == before
+    assert load(root)["jobs"][0]["state"] == "quoted"
+
+
+def test_ledger_decides_job_state_after_a_crash(planned3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    ledger_issue(root, "j0001", "b", 10.0)                    # issued, but the plan save never happened
+    assert read_json(planned3.plan_file)["jobs"][0]["state"] == "quoted"
+    assert load(root)["jobs"][0]["state"] == "issued"
+    assert issue_next(root, "b") == [] and audit(root)["ok"] is True
+    j2 = add_job(root, "u01", "b", "draft")["id"]              # the next save persists the reconciled state
+    assert read_json(planned3.plan_file)["jobs"][0]["state"] == "issued"
+    ledger_issue(root, j2, "b", 5.0)                           # a planned job: no estimate is invented
+    assert load(root)["jobs"][1] == {"id": j2, "unit": "u01", "batch": "b", "quality": "draft",
+                                     "state": "issued", "est_credits": None}
+    ledger_done(root, "j0001", "prov-1", 9.0); ledger_fail(root, j2, "timeout")
+    assert [j["state"] for j in load(root)["jobs"]] == ["done", "failed"]
+
+
+def test_reconciliation_never_moves_a_job_backwards(planned3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+    data = read_json(planned3.plan_file)
+    data["jobs"][0]["state"] = "done"
+    write_json(planned3.plan_file, data)
+    assert load(root)["jobs"][0]["state"] == "done"
+
+
+@pytest.mark.parametrize("setup, fragment", [
+    ("never_issued", "never issued"),
+    ("damaged_ledger", "damaged"),
+])
+def test_refused_record_done_leaves_no_take(planned3, clip3, setup, fragment):
+    root = planned3.root
+    if setup == "never_issued":                                # the plan claims issued, the ledger does not
+        data = read_json(planned3.plan_file)
+        data["jobs"][0]["state"] = "issued"
+        write_json(planned3.plan_file, data)
+    else:
+        set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+        with planned3.ledger_file.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write('{"type": "job_done", "time": "x", "job_id": "j0001", ')
+    with pytest.raises(CineRecastError, match=fragment):
+        record_done(root, "j0001", "prov-1", 5.0, clip3)
+    assert list_takes(root, "u01") == []
+
+
+def test_done_job_without_a_take_points_to_a_new_job(planned3, clip3):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
+    ledger_done(root, "j0001", "prov-1", 9.0)                  # recorded as done, but no take was stored
+    with pytest.raises(CineRecastError, match="jobs add"):
+        record_done(root, "j0001", "prov-1", 9.0, clip3)
+    assert list_takes(root, "u01") == []
+    j2 = add_job(root, "u01", "b", "draft")["id"]; set_cost(root, j2, 10.0); issue_next(root, "b")
+    assert record_done(root, j2, "prov-2", 9.0, clip3)["take"] == "t001"
+    with pytest.raises(CineRecastError) as refused:
+        record_done(root, j2, "prov-2", 9.0, clip3)            # done with a take: no hint, no new folder
+    assert "jobs add" not in refused.value.message and list_takes(root, "u01") == ["t001"]

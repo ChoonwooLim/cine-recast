@@ -95,7 +95,7 @@ def _cmd_plan_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_jobs_list(args: argparse.Namespace) -> int:
-    _print_json(plan.load(Path(args.project))["jobs"])
+    _print_json(plan.list_jobs(Path(args.project)))
     return 0
 
 
@@ -217,7 +217,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     jobs = sub.add_parser("jobs", help="generation jobs")
     jobs_sub = jobs.add_subparsers(dest="jobs_command")
-    jobs_list = jobs_sub.add_parser("list", help="print the jobs as JSON")
+    jobs_list = jobs_sub.add_parser("list", help="print the jobs and the params each is sent with, as JSON")
     jobs_list.add_argument("project", help="project folder")
     jobs_list.set_defaults(func=_cmd_jobs_list)
     jobs_add = jobs_sub.add_parser("add", help="add a planned job for a unit")

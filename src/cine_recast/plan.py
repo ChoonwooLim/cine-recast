@@ -3,7 +3,9 @@
 A unit is a run of consecutive shots generated in one call. Every unit has jobs; a job moves
 planned -> quoted (set_cost) -> issued (issue_next) -> done or failed (record_done, record_fail).
 A job reaches the agent only through issue_next, which hands it to ledger.issue first and stops
-at the first refusal. Model limits come only from the project's models.json.
+at the first refusal. The ledger is the authority for job state: every load moves a job forward
+to the state its ledger events prove. The resolution sent follows the job's quality.
+Model limits come only from the project's models.json.
 """
 
 import math
@@ -113,6 +115,18 @@ def _models_by_id(root: Path) -> dict[str, dict]:
     return {m["id"]: m for m in models if isinstance(m, dict) and _is_text(m.get("id"))}
 
 
+def _valid_models(root: Path) -> dict[str, dict]:
+    problems = check_models(root)
+    if problems:
+        raise CineRecastError("models.json is not valid: " + "; ".join(problems))
+    return _models_by_id(root)
+
+
+def _resolution(spec: dict, quality: str) -> str:
+    """draft uses the model's first resolution, final its last."""
+    return spec["resolutions"][0] if quality == "draft" else spec["resolutions"][-1]
+
+
 def _ratio(text: str) -> float | None:
     parts = text.split(":")
     if len(parts) != 2:
@@ -143,7 +157,38 @@ def _closest_aspect(spec: dict, target: float) -> str:
 
 # --- plan.json -----------------------------------------------------------------------------
 
+def _ledger_states(root: Path) -> dict[str, str]:
+    """Job states proven by the ledger: issued, then the first finish (done or failed).
+
+    Reads only the ledger's valid lines (ledger._load never raises), so a damaged ledger does not
+    block reading the plan; issuing and recording still go through the ledger, which refuses then.
+    Same rules as the ledger's own state: a finish counts only after an issue, the first one wins.
+    """
+    events, _ = ledger._load(root)
+    states: dict[str, str] = {}
+    for ev in events:
+        kind = ev["type"]
+        if kind == "job_issued":
+            states.setdefault(ev["job_id"], "issued")
+        elif kind in ("job_done", "job_failed") and states.get(ev["job_id"]) == "issued":
+            states[ev["job_id"]] = "done" if kind == "job_done" else "failed"
+    return states
+
+
+_RANK = {"planned": 0, "quoted": 1, "issued": 2, "done": 3, "failed": 3}
+
+
+def _reconcile(root: Path, data: dict) -> None:
+    """Move each job forward to the state the ledger proves; never backwards, estimates untouched."""
+    states = _ledger_states(root)
+    for job in data["jobs"]:
+        proven = states.get(job.get("id")) if isinstance(job, dict) else None
+        if proven is not None and _RANK.get(job.get("state"), -1) <= _RANK[proven]:
+            job["state"] = proven
+
+
 def load(root: Path) -> dict:
+    """plan.json with every job's state reconciled from the ledger (written on the next save)."""
     pp = ProjectPaths(Path(root))
     if not pp.plan_file.is_file():
         raise CineRecastError(f"plan.json not found: {pp.plan_file}; run plan build first")
@@ -153,6 +198,7 @@ def load(root: Path) -> dict:
         raise CineRecastError(f"plan.json is not valid JSON: {exc}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("units"), list) or not isinstance(data.get("jobs"), list):
         raise CineRecastError("plan.json must hold the lists 'units' and 'jobs'")
+    _reconcile(root, data)
     return data
 
 
@@ -218,10 +264,7 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
     problems = casting.check(root)
     if problems:
         raise CineRecastError("casting is not ready: " + "; ".join(problems))
-    problems = check_models(root)
-    if problems:
-        raise CineRecastError("models.json is not valid: " + "; ".join(problems))
-    spec = _models_by_id(root).get(model)
+    spec = _valid_models(root).get(model)
     if spec is None:
         raise CineRecastError(f"model {model!r} is not in models.json")
     if spec["kind"] != "video":
@@ -249,7 +292,7 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         else:
             groups.append([shot])
 
-    resolution = spec["resolutions"][0] if quality == "draft" else spec["resolutions"][-1]
+    resolution = _resolution(spec, quality)  # the unit's default; each job's quality decides what is sent
     aspect_ratio = _closest_aspect(spec, box.aspect)
     units: list[dict] = []
     for number, group in enumerate(groups, start=1):
@@ -331,6 +374,20 @@ def check(root: Path) -> list[str]:
         if params.get("resolution") not in spec["resolutions"]:
             problems.append(f"{label}: resolution {params.get('resolution')!r} is not offered by model "
                             f"{spec['id']!r} ({', '.join(spec['resolutions'])}).")
+    for position, job in enumerate(data["jobs"]):
+        if not isinstance(job, dict):
+            problems.append(f"jobs[{position}] must be an object.")
+            continue
+        try:
+            payload = _payload(root, data, models, job) if models else None
+        except CineRecastError as exc:
+            problems.append(exc.message)
+            continue
+        if payload is not None:
+            spec = models[payload["params"]["model"]]
+            if payload["params"]["resolution"] not in spec["resolutions"]:
+                problems.append(f"job {job.get('id')}: resolution {payload['params']['resolution']!r} is not "
+                                f"offered by model {spec['id']!r}.")
     return problems
 
 
@@ -365,39 +422,74 @@ def set_cost(root: Path, job_id: str, credits: float) -> dict:
     return job
 
 
-def _execution(root: Path, data: dict, job: dict) -> dict:
-    """What the agent needs to run one job: tool, parameters and absolute input paths."""
+def _payload(root: Path, data: dict, models: dict[str, dict], job: dict) -> dict:
+    """The exact call for one job: tool, parameters and absolute input paths.
+
+    The unit gives the model, prompt, duration, aspect ratio and inputs; the job's quality gives
+    the resolution. The same payload is shown for quoting and sent at issue.
+    """
+    jid = job.get("id")
     try:
         item = _find_unit(data, job.get("unit"))
     except CineRecastError as exc:
-        raise CineRecastError(f"job {job.get('id')} refers to an unknown unit: {job.get('unit')!r}") from exc
-    params = item["params"]
+        raise CineRecastError(f"job {jid} refers to an unknown unit: {job.get('unit')!r}") from exc
+    if job.get("quality") not in QUALITIES:
+        raise CineRecastError(f"job {jid}: quality must be one of {', '.join(QUALITIES)}, "
+                              f"not {job.get('quality')!r}")
+    spec = models.get(item.get("model"))
+    if spec is None:
+        raise CineRecastError(f"job {jid}: model {item.get('model')!r} of unit {item['id']} is not in models.json")
+    params = item.get("params") if isinstance(item.get("params"), dict) else {}
+    inputs = item.get("inputs") if isinstance(item.get("inputs"), list) else []
     return {
-        "job_id": job["id"], "unit": item["id"], "tool": TOOL,
-        "params": {"model": item["model"], "prompt": item["prompt"], "duration": params["duration"],
-                   "aspect_ratio": params["aspect_ratio"], "resolution": params["resolution"]},
+        "job_id": jid, "unit": item["id"], "tool": TOOL,
+        "params": {"model": item["model"], "prompt": item.get("prompt"), "duration": params.get("duration"),
+                   "aspect_ratio": params.get("aspect_ratio"), "resolution": _resolution(spec, job["quality"])},
         "medias": [{"role": entry.get("role"), "path": str(_resolve(root, entry["path"]))}
-                   for entry in item["inputs"]],
+                   for entry in inputs if isinstance(entry, dict) and _is_text(entry.get("path"))],
     }
+
+
+def job_payload(root: Path, job_id: str) -> dict:
+    """The call a job makes when issued, in the shape of an issue_next item. Quote exactly this."""
+    root = Path(root)
+    data = load(root)
+    return _payload(root, data, _valid_models(root), _find_job(data, job_id))
+
+
+def list_jobs(root: Path) -> list[dict]:
+    """Every job with its state, batch, quality, estimate and the params it will be sent with."""
+    root = Path(root)
+    data = load(root)
+    models = _valid_models(root)
+    return [{"id": job.get("id"), "unit": job.get("unit"), "batch": job.get("batch"), "quality": job.get("quality"),
+             "state": job.get("state"), "est_credits": job.get("est_credits"),
+             "params": _payload(root, data, models, job)["params"]}
+            for job in data["jobs"] if isinstance(job, dict)]
 
 
 def issue_next(root: Path, batch: str) -> list[dict]:
     """Hand the batch's quoted jobs to the ledger in job order and return what to run for each.
 
-    Requires a clean check. Stops with CineRecastError at the first job the ledger refuses;
-    the jobs issued before it stay issued.
+    Requires a clean casting check (rights are read again at the moment of spending) and a clean
+    plan check. Stops with CineRecastError at the first job the ledger refuses; the jobs issued
+    before it stay issued.
     """
     root = Path(root)
+    problems = casting.check(root)
+    if problems:
+        raise CineRecastError("casting is not ready, no job issued: " + "; ".join(problems))
     problems = check(root)
     if problems:
         raise CineRecastError("plan check failed, no job issued: " + "; ".join(problems))
     data = load(root)
+    models = _valid_models(root)
     queue = sorted((j for j in data["jobs"]
                     if isinstance(j, dict) and j.get("batch") == batch and j.get("state") == "quoted"),
                    key=_job_number)
     issued: list[dict] = []
     for job in queue:
-        execution = _execution(root, data, job)
+        execution = _payload(root, data, models, job)
         try:
             ledger.issue(root, job["id"], batch, job.get("est_credits"))
         except CineRecastError as exc:
@@ -416,22 +508,52 @@ def _issued_job(data: dict, job_id: str) -> dict:
     return job
 
 
+def _job_has_take(root: Path, unit_id: str, job_id: str) -> bool:
+    from cine_recast.takes import list_takes  # takes imports this module
+
+    pp = ProjectPaths(Path(root))
+    for take_id in list_takes(root, unit_id):
+        try:
+            if read_json(pp.take_dir(unit_id, take_id) / "meta.json").get("job") == job_id:
+                return True
+        except (OSError, ValueError, AttributeError):
+            continue
+    return False
+
+
 def record_done(root: Path, job_id: str, provider_id: str, credits: float, file: Path) -> dict:
-    """Record an issued job as done in the ledger, then store the returned file as a new take."""
+    """Store the returned file as a new take, record the job as done in the ledger, then save.
+
+    If the ledger refuses, the take folder made by this call is removed, so a refused call leaves
+    nothing behind.
+    """
     from cine_recast.takes import new_take  # takes imports this module
 
     root = Path(root)
     data = load(root)
+    job = _find_job(data, job_id)
+    if job.get("state") == "done" and _is_text(job.get("unit")) and not _job_has_take(root, job["unit"], job_id):
+        raise CineRecastError(
+            f"job {job_id} is already done in the ledger but no take was stored for it; register the "
+            "file again with a new job: jobs add, then jobs set-cost, jobs next and jobs done")
     job = _issued_job(data, job_id)
     _find_unit(data, job.get("unit"))
+    if not _is_text(provider_id):
+        raise CineRecastError(f"job {job_id}: provider_id must not be empty")
+    if not _is_number(credits) or credits < 0:
+        raise CineRecastError(f"job {job_id}: credits must be a finite number of at least 0: {credits!r}")
     source = Path(file)
     if not source.is_file():
         raise CineRecastError(f"job {job_id}: result file not found: {source}")
-    ledger.done(root, job_id, provider_id, credits)
     take = new_take(root, job["unit"], source, {
         "job": job_id, "provider_id": provider_id, "credits": float(credits),
         "quality": job.get("quality"), "recorded_at": _now(),
     })
+    try:
+        ledger.done(root, job_id, provider_id, credits)
+    except BaseException:
+        shutil.rmtree(ProjectPaths(root).take_dir(job["unit"], take), ignore_errors=True)
+        raise
     job["state"] = "done"
     _save(root, data)
     return {"unit": job["unit"], "take": take}
