@@ -647,6 +647,46 @@ def test_check_reads_the_model_limits_as_they_are_now(planned3, change, fragment
     assert any("u01" in p and fragment in p for p in check(planned3.root))
 
 
+# --- final-review wave: project material is never registered as a take ---
+
+def _issued_job(pp):
+    set_cost(pp.root, "j0001", 10.0); approve(pp.root, "b", 50.0, "owner"); issue_next(pp.root, "b")
+
+
+@pytest.mark.parametrize("make", [
+    lambda pp: pp.unit_dir("u01") / "ref.mp4",                                     # the unit's own reference clip
+    lambda pp: pp.root / "reference" / "source.mp4",
+    lambda pp: pp.root / "REFERENCE" / "source.mp4",                               # another spelling of the folder
+    lambda pp: pp.root / "downloads" / ".." / "analysis" / "shots" / "0001" / "ref.mp4",
+    lambda pp: _copy_into(pp, "takes"),
+    lambda pp: _copy_into(pp, "out"),
+    lambda pp: _copy_into(pp, "assets"),
+])
+def test_jobs_done_refuses_project_material(planned3, make, capsys):
+    _issued_job(planned3)
+    source = make(planned3)
+    capsys.readouterr()
+    assert main(["jobs", "done", str(planned3.root), "--job", "j0001", "--provider-id", "prov-1", "--credits", "9",
+                 "--file", str(source)]) == 2
+    assert "project material" in capsys.readouterr().err
+    assert list_takes(planned3.root, "u01") == [] and load(planned3.root)["jobs"][0]["state"] == "issued"
+
+
+def _copy_into(pp, folder):
+    target = pp.root / folder / "x" / "clip.mp4"
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(pp.root / "reference" / "source.mp4", target)
+    return target
+
+
+def test_jobs_done_takes_a_downloaded_file_inside_the_project(planned3, clip3):
+    _issued_job(planned3)
+    downloaded = planned3.root / "downloads" / "j0001.mp4"
+    downloaded.parent.mkdir()
+    shutil.copyfile(clip3, downloaded)
+    assert record_done(planned3.root, "j0001", "prov-1", 9.0, downloaded)["take"] == "t001"
+
+
 def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
     import cine_recast.plan as plan_module
 

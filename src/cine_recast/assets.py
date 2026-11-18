@@ -29,7 +29,7 @@ from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import read_json, write_json
 from cine_recast.lifecycle import (SENT, digest, fail, finish, highest, is_text, issue_in_order, quote, reconcile,
                                    require_issued, require_result, resolve, stale_quote)
-from cine_recast.paths import ProjectPaths
+from cine_recast.paths import ProjectPaths, inside_folder
 from cine_recast.plan import closest_aspect, valid_models
 from cine_recast.project import load_project
 from cine_recast.textrules import is_english_prompt
@@ -279,8 +279,9 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
     """Store the returned images as assets/<element>/<id>_<n><suffix>, record the asset as done in
     the ledger, then save. Returns {"asset", "files"} with the stored files relative to the project.
 
-    A name that exists already is never overwritten: the call fails. A file from the project's own
-    assets/ folder is refused, so a stored image cannot be registered again under another asset. If
+    A name that exists already is never overwritten: the call fails. A file inside the project's
+    reference/, analysis/, takes/, out/ or assets/ folder is refused: it is project material (a frame
+    of the reference, or an image already stored under another asset), not a generation result. If
     the ledger refuses, the files stored by this call are removed, so a refused call leaves nothing
     behind.
     """
@@ -295,15 +296,16 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
     sources = [Path(file) for file in files]
     if not sources:
         raise CineRecastError(f"asset {asset_id}: give at least one result file")
-    stored_assets = pp.asset_dir(element).parent.resolve()
     for source in sources:
         if source.suffix.lower() not in IMAGE_SUFFIXES:
             raise CineRecastError(f"asset {asset_id}: result file {source} must be a .jpg, .jpeg, .png or .webp file")
         if not source.is_file():
             raise CineRecastError(f"asset {asset_id}: result file not found: {source}")
-        if source.resolve().is_relative_to(stored_assets):
-            raise CineRecastError(f"asset {asset_id}: result file {source} lies inside the project's assets folder; "
-                                  "give the file the provider returned")
+        folder = inside_folder(source, pp.material_folders())
+        if folder is not None:
+            raise CineRecastError(f"asset {asset_id}: result file {source} is project material (inside the project's "
+                                  f"{folder.name} folder), not a generation result; register only files downloaded "
+                                  "from the generation job")
     folder = pp.asset_dir(element)
     targets = [folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
     for target in targets:

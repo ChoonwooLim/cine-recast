@@ -19,6 +19,17 @@ def test_assemble_with_supplied_audio(finished3, tmp_path):
     assert info.has_audio is True and abs(info.duration - 3.75) < 0.1
 
 
+@pytest.mark.parametrize("make", [
+    lambda pp, clip: pp.root / "reference" / "source.mp4",
+    lambda pp, clip: pp.shot_dir(1) / "ref.mp4",
+    lambda pp, clip: clip,                                      # the original file given to init
+])
+def test_assemble_refuses_the_reference_as_audio(finished3, clip3, make):
+    with pytest.raises(CineRecastError, match="sound of the reference is never used"):
+        assemble(finished3.root, audio=make(finished3, clip3))
+    assert not (finished3.out_dir / "final.mp4").exists()
+
+
 def test_assemble_needs_a_selected_take(planned3):
     with pytest.raises(CineRecastError, match="u01"):
         assemble(planned3.root)

@@ -1,9 +1,11 @@
 """Join the selected, conformed takes into the finished film and make the side-by-side comparison.
 
-The finished film is built only from conformed takes plus an audio file the caller supplies.
-The reference video is used by compare() alone, and only there is its audio heard.
+The finished film is built only from conformed takes plus an audio file the caller supplies; an
+audio file that is the reference's material is refused. The reference video is used by compare()
+alone, and only there is its audio heard.
 """
 
+import hashlib
 import tempfile
 from fractions import Fraction
 from pathlib import Path
@@ -12,7 +14,7 @@ from cine_recast import plan
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import SCALE_FLAGS, probe, run
-from cine_recast.paths import ProjectPaths
+from cine_recast.paths import ProjectPaths, inside_folder
 from cine_recast.project import load_project
 
 COMPARE_HEIGHT = 540
@@ -37,6 +39,28 @@ def _clips_by_shot(root: Path) -> dict[int, Path]:
     return clips
 
 
+def _sha256(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _check_audio(root: Path, audio: Path) -> None:
+    """Refuse an audio file that is the reference's material: a file inside the project's reference/
+    or analysis/ folder, or a file whose bytes equal the reference (the original file given to init)."""
+    if not audio.is_file():
+        raise CineRecastError(f"audio file not found: {audio}")
+    pp = ProjectPaths(root)
+    folder = inside_folder(audio, [pp.reference_dir, pp.analysis_dir])
+    if folder is not None:
+        raise CineRecastError(f"audio file {audio} lies inside the project's {folder.name} folder; the sound of the "
+                              "reference is never used, give an audio file made for the film")
+    reference = root / load_project(root)["reference"]
+    if (reference.is_file() and audio.stat().st_size == reference.stat().st_size
+            and _sha256(audio) == _sha256(reference)):
+        raise CineRecastError(f"audio file {audio} is a copy of the reference video; the sound of the reference is "
+                              "never used, give an audio file made for the film")
+
+
 def _concat_entry(path: Path) -> str:
     return "file '" + path.resolve().as_posix().replace("'", "'\\''") + "'\n"
 
@@ -51,8 +75,8 @@ def assemble(root: Path, *, audio: Path | None = None) -> Path:
     missing = [shot.index for shot in shots if shot.index not in clips]
     if missing:
         raise CineRecastError(f"no unit covers shot(s) {', '.join(map(str, missing))}; plan every shot first")
-    if audio is not None and not Path(audio).is_file():
-        raise CineRecastError(f"audio file not found: {audio}")
+    if audio is not None:
+        _check_audio(root, Path(audio))
     pp.out_dir.mkdir(parents=True, exist_ok=True)
     master, final = pp.out_dir / "master.mov", pp.out_dir / "final.mp4"
     with tempfile.TemporaryDirectory() as scratch:

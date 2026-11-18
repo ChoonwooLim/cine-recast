@@ -1,4 +1,23 @@
+import os
+from collections.abc import Iterable
 from pathlib import Path
+
+
+def inside_folder(path: Path, folders: Iterable[Path]) -> Path | None:
+    """The first of `folders` that `path` is or lies inside, or None.
+
+    Both sides are resolved first (symbolic links and ".." are followed, so another spelling of a
+    project folder is still that folder) and compared case-insensitively on Windows.
+    """
+    def comparable(item: Path) -> Path:
+        return Path(os.path.normcase(Path(item).resolve()))
+
+    target = comparable(path)
+    for folder in folders:
+        base = comparable(folder)
+        if target == base or base in target.parents:
+            return Path(folder)
+    return None
 
 
 class ProjectPaths:
@@ -60,12 +79,25 @@ class ProjectPaths:
     def assets_file(self) -> Path:
         return self.root / "assets.json"
 
+    @property
+    def assets_dir(self) -> Path:
+        return self.root / "assets"
+
     def asset_dir(self, element: str) -> Path:
-        return self.root / "assets" / element
+        return self.assets_dir / element
+
+    @property
+    def takes_dir(self) -> Path:
+        return self.root / "takes"
 
     def take_dir(self, unit_id: str, take_id: str) -> Path:
-        return self.root / "takes" / unit_id / take_id
+        return self.takes_dir / unit_id / take_id
 
     @property
     def out_dir(self) -> Path:
         return self.root / "out"
+
+    def material_folders(self) -> list[Path]:
+        """The folders that hold the reference, what the tool made from it, and the stored results:
+        a file inside one of them is never a new generation result."""
+        return [self.reference_dir, self.analysis_dir, self.takes_dir, self.out_dir, self.assets_dir]

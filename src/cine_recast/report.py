@@ -16,6 +16,7 @@ _RIGHTS_LABELS = {
     "background_rights": "배경 사용 권리",
 }
 _NONE = "-"
+COPY_OVERLAP = 0.98     # a selected shot at this overlap_ratio or more is listed for a look (not a verdict)
 
 
 def _num(value, digits: int = 3) -> str:
@@ -89,25 +90,31 @@ def _scores(pp: ProjectPaths, item: dict) -> dict:
     return (read_json(path).get("shots") or {})
 
 
-def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int]]:
+def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], list[int]]:
+    """The per-shot table, the shots judged retry, and the shots whose picture is almost the
+    reference's (overlap_ratio of COPY_OVERLAP or more), all from the selected takes."""
     pp = ProjectPaths(root)
     lines = ["## 숏별 결과", "",
              "| 숏 | 프레임 범위 | 단위 | 방법 | 모델 | 선택 테이크 | 카메라 | 움직임 | 색 | 깜빡임 비율 | 원본 유사 영역 | 판정 |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     retry: list[int] = []
+    copies: list[int] = []
     scores = {item["id"]: _scores(pp, item) for item in units}
     for shot in load_shots(root):
         item = next((u for u in units if shot.index in (u.get("shots") or [])), None)
         score = scores[item["id"]].get(str(shot.index), {}) if item else {}
         if score.get("verdict") == "retry":
             retry.append(shot.index)
+        overlap = score.get("overlap_ratio")
+        if isinstance(overlap, (int, float)) and not isinstance(overlap, bool) and overlap >= COPY_OVERLAP:
+            copies.append(shot.index)
         row = (shot.index, f"{shot.start}-{shot.end}",
                item["id"] if item else None, item.get("method") if item else None,
                item.get("model") if item else None, item.get("selected_take") if item else None,
                _num(score.get("camera")), _num(score.get("motion")), _num(score.get("color")),
                _num(score.get("flicker_ratio")), _num(score.get("overlap_ratio")), score.get("verdict"))
         lines.append("| " + " | ".join(_cell(v) for v in row) + " |")
-    return [*lines, ""], retry
+    return [*lines, ""], retry, copies
 
 
 def _cost(root: Path) -> list[str]:
@@ -127,11 +134,14 @@ def write_report(root: Path) -> Path:
     root = Path(root)
     pp = ProjectPaths(root)
     units = [u for u in plan.load(root)["units"] if isinstance(u, dict)]
-    shot_lines, retry = _shot_table(root, units)
+    shot_lines, retry, copies = _shot_table(root, units)
     unselected = [u["id"] for u in units if not u.get("selected_take")]
     open_lines = ["## 열린 항목", ""]
     open_lines.append("- 선택 테이크가 없는 단위: " + (", ".join(unselected) if unselected else "없음"))
     open_lines.append("- 판정이 retry인 숏: " + (", ".join(map(str, retry)) if retry else "없음"))
+    open_lines.append(f"- 화면이 원본과 거의 같은 숏(원본 유사 영역 {COPY_OVERLAP:.2f} 이상): "
+                      + (", ".join(map(str, copies)) + " - 원본을 복사한 화면이 아닌지 눈으로 확인한다"
+                         if copies else "없음"))
     text = "\n".join(["# CineRecast 보고서", "", *_summary(root), *_rights(root), *_swap_table(root),
                       *shot_lines, *_cost(root), *open_lines, ""])
     pp.out_dir.mkdir(parents=True, exist_ok=True)

@@ -266,6 +266,25 @@ def test_background_asset_with_refs_needs_background_rights(analyzed3, tmp_path)
                refs=[png(tmp_path / "ref.png")])["id"] == "a0001"
 
 
+@pytest.mark.parametrize("make", [
+    lambda pp: pp.shot_dir(1) / "stills" / "first.png",                            # a frame of the reference
+    lambda pp: png(pp.root / "reference" / "frame.png"),
+    lambda pp: png(pp.root / "takes" / "u01" / "t001" / "frame.png"),
+    lambda pp: png(pp.root / "out" / "frame.png"),
+    lambda pp: png(pp.root / "Analysis" / "review" / "frame.png"),
+])
+def test_done_refuses_project_material(assets3, make, capsys):
+    root = assets3.root
+    _issued(root, "hero")
+    issue_next(root, "assets-1")
+    source = make(assets3)
+    capsys.readouterr()
+    assert main(["assets", "done", str(root), "--asset", "a0001", "--provider-id", "prov-1", "--credits", "6",
+                 "--file", str(source)]) == 2
+    assert "project material" in capsys.readouterr().err
+    assert job_states(root)["a0001"] == "issued" and not assets3.asset_dir("hero").exists()
+
+
 def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):
     root = assets3.root
     first = generate_and_use(root, "hero", tmp_path)                            # a0001 done

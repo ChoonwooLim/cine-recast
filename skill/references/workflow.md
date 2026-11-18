@@ -194,7 +194,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--file`: 돌려받은 이미지마다 한 번씩. `--provider-id`: Higgsfield의 작업 id. `--credits`: 실제로 차감된 크레딧.
 - 쓰는 것: `assets/<요소>/<자료 id>_<번호>.<확장자>`, `assets.json`, `ledger.jsonl`. 있던 파일은 덮어쓰지 않는다.
 - 출력: `a0001: done, files assets/hero/a0001_1.png, assets/hero/a0001_2.png`.
-- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없거나 이미지 형식이 아니다. 프로젝트의 `assets/` 폴더 안에 있는 파일이다.
+- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없거나 이미지 형식이 아니다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안에 있는 파일이다(원본 스틸이나 다른 자료로 이미 등록된 이미지 같은 프로젝트 자료이지 생성 결과가 아니다).
 
 ### assets fail
 
@@ -330,7 +330,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--provider-id`: Higgsfield의 작업 id. `--credits`: 실제로 차감된 크레딧.
 - 쓰는 것: `takes/<단위>/<테이크>/raw.<확장자>`, `meta.json`, `ledger.jsonl`, `plan.json`. 테이크 번호는 `t001`부터 올라가고 덮어쓰지 않는다.
 - 출력: `j0001: done, unit u01 take t001`.
-- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없다.
+- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안에 있는 파일이다(링크와 `..`을 따라간 실제 위치로 보고, 대소문자가 달라도 같은 폴더로 본다). 그런 파일은 프로젝트 자료이지 생성 결과가 아니다. 생성 작업에서 내려받은 파일만 등록한다.
 
 ### jobs fail
 
@@ -402,7 +402,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 쓰는 것: `out/master.mov`(ProRes), `out/final.mp4`. 출력: `final.mp4`의 경로.
 - `--audio`: 완성본에 넣을 오디오 파일. 원본의 소리는 쓰지 않는다. 생략하면 소리 없는 영상이 된다.
-- 거부: 고른 테이크가 없는 단위가 있다. 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다.
+- 거부: 고른 테이크가 없는 단위가 있다. 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다. `--audio`가 프로젝트의 `reference/`나 `analysis/` 안에 있는 파일이거나, 바이트가 참조 영상과 같은 파일이다(`init`에 준 원본 파일도 여기서 걸린다).
 
 ### compare
 
@@ -423,7 +423,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr report $p
 ```
 
-- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 비용, 열린 항목(고른 테이크가 없는 단위, 판정이 `retry`인 숏).
+- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 비용, 열린 항목(고른 테이크가 없는 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏). 마지막 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
 - 계획의 일부만 끝난 상태에서도 쓸 수 있다.
 
 ## 파일 형식
