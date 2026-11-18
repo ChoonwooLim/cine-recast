@@ -255,14 +255,14 @@ id와 값은 형식을 보여 주는 예시다. 실제 값은 `models_explore`�
 ```
 
 - `ok`가 `true`이고 `problems`가 비어 있어야 한다.
-- `batches`의 묶음마다 `limit`(승인 한도), `committed`(쓴 크레딧과, 끝나지 않은 작업의 견적), `remaining`(남은 한도)을 본다.
-- `provider_ids`는 끝난 작업의 Higgsfield 작업 id다.
+- `batches`의 묶음마다 `limit`(승인 한도), `committed`(쓴 크레딧과, 끝나지 않은 작업의 견적), `remaining`(남은 한도)을 본다. `totals`는 모든 묶음을 더한 같은 세 값이다.
+- `provider_ids`는 끝난 작업의 Higgsfield 작업 id다. `report`가 쓰는 보고서의 비용 아래에도 같은 목록이 있다.
 
 Higgsfield의 `transactions`와 대조한다.
 
 1. `provider_ids`의 작업마다 그에 해당하는 차감이 내역에 있는가.
 2. 이 프로젝트를 하는 동안의 차감 가운데 장부에 없는 것이 있는가. 있으면 승인 기록 없는 유료 호출이다.
-3. 묶음별 사용액의 합이 내역의 차감 합과 맞는가.
+3. 묶음별 사용액의 합(`totals`의 `committed`, 끝나지 않은 작업이 없을 때)이 내역의 차감 합과 맞는가.
 
 어긋나는 것이 있으면 고치려 하지 말고 무엇이 얼마나 다른지 사용자에게 그대로 보고한다.
 

@@ -276,9 +276,10 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
 
     A name that exists already is never overwritten: the call fails. A file inside the project's
     reference/, analysis/, takes/, out/ or assets/ folder is refused: it is project material (a frame
-    of the reference, or an image already stored under another asset), not a generation result. If
-    the ledger refuses, the files stored by this call are removed, so a refused call leaves nothing
-    behind.
+    of the reference, or an image already stored under another asset), not a generation result.
+    The stored files are listed in assets.json before the ledger records the asset as done, so a
+    crash between the two leaves them reachable. If the ledger refuses, the files stored by this call
+    are removed and taken off the list again, so a refused call leaves nothing behind.
     """
     root = Path(root)
     pp = ProjectPaths(root)
@@ -323,8 +324,20 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
         undo()
         raise
     names = [target.relative_to(root).as_posix() for target in targets]
-    asset["files"] = names  # saved only once the ledger records the asset as done
-    finish(root, asset, provider_id, credits, undo, lambda: _save(root, data))
+    previous = asset.get("files", [])
+    asset["files"] = names
+    try:
+        _save(root, data)  # listed before the ledger records done, so a crash after that strands no paid file
+    except BaseException:
+        undo()
+        raise
+
+    def take_back() -> None:
+        undo()
+        asset["files"] = previous
+        _save(root, data)
+
+    finish(root, asset, provider_id, credits, take_back, lambda: _save(root, data))
     return {"asset": asset_id, "files": names}
 
 

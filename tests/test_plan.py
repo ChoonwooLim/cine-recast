@@ -755,6 +755,69 @@ def test_models_file_errors_are_problem_lines(planned3):
     assert "models.json" in problem and "line 1, column 13" in problem
 
 
+# --- final-review wave: life cycle ---
+
+def _boom(*args, **kwargs):
+    raise OSError("simulated crash while saving")
+
+
+def test_sent_params_survive_a_save_that_fails_after_the_ledger_issued(planned3, monkeypatch):
+    import cine_recast.ledger as ledger_module
+    import cine_recast.plan as plan_module
+
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    [before] = list_jobs(root)
+    real_issue = ledger_module.issue
+
+    def issue_then_crash(*args, **kwargs):
+        record = real_issue(*args, **kwargs)
+        monkeypatch.setattr(plan_module, "_save", _boom)       # the save after the ledger line fails
+        return record
+
+    monkeypatch.setattr(ledger_module, "issue", issue_then_crash)
+    with pytest.raises(OSError):
+        issue_next(root, "b")
+    monkeypatch.undo()
+    [after] = list_jobs(root)
+    assert after["state"] == "issued" and after["params"] == before["params"]
+
+
+def test_a_refused_issue_keeps_no_sent_params(planned3):
+    j2 = _two_jobs_over_the_limit(planned3.root)
+    with pytest.raises(CineRecastError, match="limit"):
+        issue_next(planned3.root, "b")
+    jobs = {j["id"]: j for j in read_json(planned3.plan_file)["jobs"]}
+    assert "sent_params" in jobs["j0001"] and "sent_params" not in jobs[j2]
+
+
+def test_jobs_next_checks_only_the_units_it_issues(cast3, capsys):
+    root = cast3.root
+    write_models(root, min_seconds=1)
+    units = build(root, model="seedance_2_5", method="edit", batch="cmp", max_unit_seconds=1.6)["units"]
+    assert [u["id"] for u in units] == ["u01", "u02", "u03"]
+    set_prompt(root, "u01", GOOD_PROMPT)                               # the other prompts stay empty
+    set_cost(root, "j0001", 10.0); approve(root, "cmp", 10.0, "owner")
+    assert [j["job_id"] for j in issue_next(root, "cmp")] == ["j0001"]
+    problems = check(root)                                             # plan check still checks every unit
+    assert any("u02" in p and "prompt" in p for p in problems) and any("u03" in p for p in problems)
+    capsys.readouterr()
+    assert main(["plan", "check", str(root)]) == 2
+
+
+def test_approve_prints_the_new_state_of_the_batch(planned3, capsys):
+    root = str(planned3.root)
+    set_cost(planned3.root, "j0001", 4.0)
+    capsys.readouterr()
+    assert main(["approve", root, "--batch", "b", "--limit", "10", "--by", "owner"]) == 0
+    assert capsys.readouterr().out == ("approved batch b: +10.0 credits, limit now 10.0, committed 0.0, "
+                                       "remaining 10.0 (by owner)\n")
+    issue_next(planned3.root, "b")
+    assert main(["approve", root, "--batch", "b", "--limit", "5", "--by", "owner"]) == 0
+    assert capsys.readouterr().out == ("approved batch b: +5.0 credits, limit now 15.0, committed 4.0, "
+                                       "remaining 11.0 (by owner)\n")
+
+
 def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
     import cine_recast.plan as plan_module
 

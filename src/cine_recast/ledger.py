@@ -2,10 +2,19 @@
 
 State is recomputed from the append-only ledger.jsonl on every call. No cache file,
 and existing lines are never rewritten.
+
+Every writer (approve, issue, done, fail) holds an exclusive OS lock on the sidecar file
+ledger.lock for its whole read-check-append, so two commands at the same moment cannot both pass
+a limit or issue one id twice. The operating system releases the lock when the process ends, so
+a killed command leaves no stale lock behind.
 """
 
 import json
 import math
+import os
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +23,52 @@ from cine_recast.jsonio import append_jsonl
 from cine_recast.paths import ProjectPaths
 
 _DECIMALS = 6  # credit sums are rounded so float noise (0.1 + 0.2) never decides a refusal
+LOCK_WAIT = 10.0  # seconds a writer waits for ledger.lock before it refuses
+
+if os.name == "nt":
+    import msvcrt
+
+    def _try_lock(handle) -> bool:
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _try_lock(handle) -> bool:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def locked(root: Path, wait: float = LOCK_WAIT) -> Iterator[None]:
+    """Hold the exclusive lock on the project's ledger.lock, waiting up to `wait` seconds for it.
+
+    Refuses with CineRecastError when another process (or another handle) holds it that long.
+    """
+    with ProjectPaths(Path(root)).ledger_lock.open("a+b") as handle:
+        deadline = time.monotonic() + wait
+        while not _try_lock(handle):
+            if time.monotonic() >= deadline:
+                raise CineRecastError("another cine-recast command is writing the ledger; run one command at a time")
+            time.sleep(0.05)
+        try:
+            yield
+        finally:
+            _unlock(handle)
 
 
 def _now() -> str:
@@ -153,32 +208,35 @@ def _status(limits: dict[str, float], jobs: dict[str, dict], batch: str) -> dict
     return {"limit": limit, "committed": committed, "remaining": _r(limit - committed)}
 
 
-def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "") -> dict:
+def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "", *,
+            lock_wait: float = LOCK_WAIT) -> dict:
     """Record a credit approval for a batch. Refused while the ledger does not validate."""
     _check_text("batch", batch)
     _check_amount("limit_credits", limit_credits, positive=True)
     _check_text("by", by)
-    _events(root)  # a damaged ledger is repaired before anything is appended to it
-    return _write(root, {"type": "approval", "time": _now(), "batch": batch,
-                         "limit_credits": float(limit_credits), "by": by, "note": note})
+    with locked(root, lock_wait):
+        _events(root)  # a damaged ledger is repaired before anything is appended to it
+        return _write(root, {"type": "approval", "time": _now(), "batch": batch,
+                             "limit_credits": float(limit_credits), "by": by, "note": note})
 
 
-def issue(root: Path, job_id: str, batch: str, est_credits: float) -> dict:
+def issue(root: Path, job_id: str, batch: str, est_credits: float, *, lock_wait: float = LOCK_WAIT) -> dict:
     _check_text("job_id", job_id)
     _check_text("batch", batch)
     _check_amount("est_credits", est_credits, positive=True)
-    limits, jobs = _state(_events(root))
-    if batch not in limits:
-        raise CineRecastError(f"no approval recorded for batch {batch!r}; approve a credit limit first")
-    if job_id in jobs:
-        raise CineRecastError(f"job already issued: {job_id}")
-    status = _status(limits, jobs, batch)
-    if not (_r(status["committed"] + est_credits) <= status["limit"]):
-        raise CineRecastError(
-            f"batch {batch!r} would exceed its approved limit: committed {status['committed']} "
-            f"+ estimate {_r(est_credits)} > limit {status['limit']}")
-    return _write(root, {"type": "job_issued", "time": _now(), "job_id": job_id, "batch": batch,
-                         "est_credits": float(est_credits)})
+    with locked(root, lock_wait):
+        limits, jobs = _state(_events(root))
+        if batch not in limits:
+            raise CineRecastError(f"no approval recorded for batch {batch!r}; approve a credit limit first")
+        if job_id in jobs:
+            raise CineRecastError(f"job already issued: {job_id}")
+        status = _status(limits, jobs, batch)
+        if not (_r(status["committed"] + est_credits) <= status["limit"]):
+            raise CineRecastError(
+                f"batch {batch!r} would exceed its approved limit: committed {status['committed']} "
+                f"+ estimate {_r(est_credits)} > limit {status['limit']}")
+        return _write(root, {"type": "job_issued", "time": _now(), "job_id": job_id, "batch": batch,
+                             "est_credits": float(est_credits)})
 
 
 def _require_open_job(root: Path, job_id: str) -> None:
@@ -190,22 +248,24 @@ def _require_open_job(root: Path, job_id: str) -> None:
         raise CineRecastError(f"job already finished: {job_id}")
 
 
-def done(root: Path, job_id: str, provider_id: str, credits: float) -> dict:
+def done(root: Path, job_id: str, provider_id: str, credits: float, *, lock_wait: float = LOCK_WAIT) -> dict:
     _check_text("job_id", job_id)
     _check_text("provider_id", provider_id)
     _check_amount("credits", credits, positive=False)
-    _require_open_job(root, job_id)
-    return _write(root, {"type": "job_done", "time": _now(), "job_id": job_id,
-                         "provider_id": provider_id, "credits": float(credits)})
+    with locked(root, lock_wait):
+        _require_open_job(root, job_id)
+        return _write(root, {"type": "job_done", "time": _now(), "job_id": job_id,
+                             "provider_id": provider_id, "credits": float(credits)})
 
 
-def fail(root: Path, job_id: str, reason: str, credits: float = 0.0) -> dict:
+def fail(root: Path, job_id: str, reason: str, credits: float = 0.0, *, lock_wait: float = LOCK_WAIT) -> dict:
     _check_text("job_id", job_id)
     _check_text("reason", reason)
     _check_amount("credits", credits, positive=False)
-    _require_open_job(root, job_id)
-    return _write(root, {"type": "job_failed", "time": _now(), "job_id": job_id,
-                         "reason": reason, "credits": float(credits)})
+    with locked(root, lock_wait):
+        _require_open_job(root, job_id)
+        return _write(root, {"type": "job_failed", "time": _now(), "job_id": job_id,
+                             "reason": reason, "credits": float(credits)})
 
 
 def batch_status(root: Path, batch: str) -> dict:
@@ -251,4 +311,6 @@ def audit(root: Path) -> dict:
     for name, st in batches.items():
         if not (st["committed"] <= st["limit"]):
             problems.append(f"batch {name!r} is over its approved limit: committed {st['committed']} > limit {st['limit']}")
-    return {"ok": not problems, "problems": problems, "batches": batches, "provider_ids": provider_ids}
+    totals = {key: _r(sum(st[key] for st in batches.values())) for key in ("limit", "committed", "remaining")}
+    return {"ok": not problems, "problems": problems, "batches": batches, "totals": totals,
+            "provider_ids": provider_ids}

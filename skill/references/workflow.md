@@ -36,6 +36,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   plan.json                         plan build. 프롬프트는 에이전트가 쓴다
   plans/plan-0001.json              plan build --replace가 보관한 이전 계획
   ledger.jsonl                      approve, jobs next, jobs done, jobs fail, assets next, assets done, assets fail
+  ledger.lock                       장부를 쓰는 명령이 쓰는 동안 잡는 잠금 파일(지우지 않아도 된다)
   takes/u01/t001/raw.mp4, meta.json jobs done
   takes/u01/t001/shots/0001.mov, conform.json     conform
   takes/u01/t001/scores.json        qc
@@ -44,7 +45,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   out/report.md                     report
 ```
 
-`ledger.jsonl`, `assets/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
+`ledger.jsonl`, `ledger.lock`, `assets/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
 
 ## 명령
 
@@ -309,7 +310,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr approve $p --batch draft-1 --limit 80 --by owner --note "drafts for u01, one retry included"
 ```
 
-- 쓰는 것: `ledger.jsonl`. 출력: `approved batch draft-1: limit 80.0 credits (by owner)`.
+- 쓰는 것: `ledger.jsonl`. 출력: 기록한 뒤의 묶음 상태. `approved batch draft-1: +80.0 credits, limit now 80.0, committed 0.0, remaining 80.0 (by owner)`(이번에 더한 한도, 지금 한도, 쓴 크레딧과 끝나지 않은 작업의 견적, 남은 한도).
 - 같은 묶음에 다시 실행하면 한도가 더해진다. 추가 승인에는 추가분만 적는다.
 - 거부: 장부가 손상돼 있다(`ledger line N is invalid`). 손상된 장부에는 아무것도 덧붙이지 않는다.
 
@@ -323,6 +324,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: JSON 목록. 항목마다 `job_id`, `unit`, `tool`(`generate_video`), `params`, `medias`(입력 파일의 절대 경로와 역할 `video` 또는 `image`). 내보낼 것이 없으면 `[]`.
 - 견적이 없는 작업(`planned`)은 나가지 않는다. 한 번 내보낸 작업은 다시 나오지 않는다.
+- 내보내기 전에 하는 `plan check`는 이번에 내보낼 작업(그 묶음에서 상태가 `quoted`인 작업)과 그 단위만 검사한다. 시험하지 않는 단위의 프롬프트가 비어 있어도 나간다. `plan check` 명령은 모든 단위를 검사한다.
 - 내보낸 작업은 끝날 때까지 견적만큼, 끝난 뒤에는 실제 사용액만큼 한도를 차지한다.
 - 거부(종료 코드 2): 묶음에 승인 기록이 없다. 견적을 더하면 한도를 넘는다(`would exceed its approved limit`). `cast check`나 `plan check`를 통과하지 못한다. 장부가 거부한 작업에서 멈추며, 그 전에 내보낸 작업의 목록은 그대로 출력된다.
 
@@ -358,7 +360,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr audit $p
 ```
 
-- 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `provider_ids`(끝난 작업의 Higgsfield 작업 id).
+- 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `totals`(모든 묶음의 `limit`, `committed`, `remaining` 합계), `provider_ids`(끝난 작업의 Higgsfield 작업 id).
 - `ok`가 `false`면 종료 코드 2. `problems`에 `ledger line 16 is invalid: ...`처럼 문제 줄이 적힌다. UTF-8로 읽을 수 없는 줄도 문제 줄 하나로 적히고 나머지 줄은 그대로 읽힌다.
 
 ### conform
@@ -432,6 +434,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 비용, 열린 항목(고른 테이크가 없는 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏). 마지막 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
+- 권리 확인: `yes`가 아닌 답에는 "확인 필요"가 붙는다. 다만 `likeness_consent`의 `not_applicable`은 도구가 확인할 수 있으면(교체하는 인물이 없거나, 인물 교체 이미지가 모두 참조 이미지 없이 생성한 파일) 붙지 않고 도구가 확인했다고 적힌다.
+- 비용: 묶음마다 한도, 사용, 잔액과 모든 묶음의 합계 줄, 그 아래 끝난 작업의 Higgsfield 작업 id 목록.
 - 계획의 일부만 끝난 상태에서도 쓸 수 있다.
 
 ## 파일 형식
@@ -543,7 +547,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$p\reference\source.mp4" -vf "select=
 
 1. `models.json`에 후보 모델을 모두 적는다.
 2. 첫 후보로 계획을 만든다. 숏을 따로따로 시험하려면 `--max-unit-seconds`로 단위를 짧게 한다.
-3. 시험할 단위의 작업에만 `jobs set-cost`를 한다. 견적이 없는 작업은 나가지 않으므로 나머지 단위에는 비용이 들지 않는다.
+3. 시험할 단위에만 프롬프트를 쓰고, 그 단위의 작업에만 `jobs set-cost`를 한다. 견적이 없는 작업은 나가지 않으므로 나머지 단위에는 비용이 들지 않는다. `jobs next`는 내보낼 작업의 단위만 검사하므로 나머지 단위의 프롬프트는 비워 둬도 된다(`plan check`는 그 단위들을 문제로 보여 준다).
 4. 비용 표를 보여 주고 승인받은 뒤 `jobs next`, 생성, `jobs done`, `conform`, `qc`, 스틸 검수까지 마친다. 점수는 `takes/<단위>/<테이크>/scores.json`에 남는다.
 5. 다음 후보로 계획을 바꾼다. 묶음 이름은 후보마다 다르게 한다.
 

@@ -454,13 +454,16 @@ def _casting_problems(root: Path) -> list[str]:
         return [exc.message]
 
 
-def check(root: Path) -> list[str]:
+def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
     """Problems that keep the plan's jobs from being issued. An empty list means it is ready.
 
     Unit ids are 'u' followed by digits and job ids 'j' followed by digits; a unit's shots are a
     non-empty list of shot numbers and its qc_skip a list of score names. Each unit's stored inputs
     must be the inputs _unit_inputs derives from the swap table and the method now, and fit the
     model's image_refs and video_ref as models.json gives them now.
+
+    With only_jobs (positions in the plan's job list), only those jobs and the units they refer to
+    are checked (issue_next checks the jobs it is about to issue); without, every unit and job.
     """
     root = Path(root)
     data = load(root)
@@ -470,7 +473,13 @@ def check(root: Path) -> list[str]:
     if cast_problems:
         problems.append("casting is not ready, so the unit inputs cannot be compared with the swap table: "
                         + "; ".join(cast_problems))
+    jobs = [(position, job) for position, job in enumerate(data["jobs"]) if only_jobs is None or position in only_jobs]
+    wanted_units = None if only_jobs is None else {job.get("unit") for _, job in jobs
+                                                   if isinstance(job, dict) and isinstance(job.get("unit"), str)}
     for position, item in enumerate(data["units"]):
+        if wanted_units is not None and not (isinstance(item, dict) and isinstance(item.get("id"), str)
+                                             and item["id"] in wanted_units):
+            continue
         if not isinstance(item, dict):
             problems.append(f"units[{position}] must be an object.")
             continue
@@ -531,7 +540,7 @@ def check(root: Path) -> list[str]:
         if params.get("resolution") not in spec["resolutions"]:
             problems.append(f"{label}: resolution {params.get('resolution')!r} is not offered by model "
                             f"{spec['id']!r} ({', '.join(spec['resolutions'])}).")
-    for position, job in enumerate(data["jobs"]):
+    for position, job in jobs:
         if not isinstance(job, dict):
             problems.append(f"jobs[{position}] must be an object.")
             continue
@@ -599,21 +608,25 @@ def issue_next(root: Path, batch: str) -> list[dict]:
     """Hand the batch's quoted jobs to the ledger in job order and return what to run for each.
 
     Requires a clean casting check (rights are read again at the moment of spending) and a clean
-    plan check. Each job must still have the payload its quote priced. Stops with IssueRefused at
-    the first job refused; the jobs issued before it stay issued and travel on the exception.
+    plan check of the jobs about to be issued and their units (other units, such as candidates not
+    under test, may stay unfinished). Each job must still have the payload its quote priced. Stops
+    with IssueRefused at the first job refused; the jobs issued before it stay issued and travel on
+    the exception.
     """
     root = Path(root)
     problems = casting.check(root)
     if problems:
         raise CineRecastError("casting is not ready, no job issued: " + "; ".join(problems))
-    problems = check(root)
+    data = load(root)
+    queued = {position for position, j in enumerate(data["jobs"])
+              if isinstance(j, dict) and j.get("batch") == batch and j.get("state") == "quoted"}
+    if not queued:
+        return []
+    queue = sorted((data["jobs"][position] for position in queued), key=_job_number)
+    problems = check(root, only_jobs=queued)
     if problems:
         raise CineRecastError("plan check failed, no job issued: " + "; ".join(problems))
-    data = load(root)
     models = valid_models(root)
-    queue = sorted((j for j in data["jobs"]
-                    if isinstance(j, dict) and j.get("batch") == batch and j.get("state") == "quoted"),
-                   key=_job_number)
     return issue_in_order(root, batch, queue, lambda job: _payload(root, data, models, job),
                           lambda: _save(root, data), noun="job", command="jobs set-cost")
 

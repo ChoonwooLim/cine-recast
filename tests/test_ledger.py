@@ -1,7 +1,10 @@
 import json
+import threading
+import time
 
 import pytest
 
+from cine_recast import ledger as ledger_module
 from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import append_jsonl
@@ -53,7 +56,8 @@ def test_rejections(tmp_path, call):
 def test_audit(tmp_path):
     approve(tmp_path, "b", 100.0, "owner"); issue(tmp_path, "j0001", "b", 10.0); done(tmp_path, "j0001", "prov-1", 9.0)
     assert audit(tmp_path) == {"ok": True, "problems": [], "provider_ids": ["prov-1"],
-                               "batches": {"b": {"limit": 100.0, "committed": 9.0, "remaining": 91.0}}}
+                               "batches": {"b": {"limit": 100.0, "committed": 9.0, "remaining": 91.0}},
+                               "totals": {"limit": 100.0, "committed": 9.0, "remaining": 91.0}}
     append_jsonl(ProjectPaths(tmp_path).ledger_file,
                  {"type": "job_done", "time": "x", "job_id": "j0777", "provider_id": "prov-x", "credits": 500.0})
     report = audit(tmp_path)
@@ -188,6 +192,60 @@ def test_approve_refuses_to_append_to_a_damaged_ledger(tmp_path):
     with pytest.raises(CineRecastError, match="line 2"):
         approve(tmp_path, "b", 10.0, "owner")
     assert ProjectPaths(tmp_path).ledger_file.read_bytes() == before
+
+
+# --- final-review wave: the read-check-append is locked; audit totals ---
+
+def test_a_writer_refuses_while_the_ledger_is_locked(tmp_path):
+    approve(tmp_path, "b", 100.0, "owner")
+    issue(tmp_path, "j0", "b", 1.0)
+    before = ProjectPaths(tmp_path).ledger_file.read_bytes()
+    with ledger_module.locked(tmp_path):
+        for call in (lambda: approve(tmp_path, "b", 1.0, "owner", lock_wait=0.2),
+                     lambda: issue(tmp_path, "j1", "b", 1.0, lock_wait=0.2),
+                     lambda: done(tmp_path, "j0", "p", 1.0, lock_wait=0.2),
+                     lambda: fail(tmp_path, "j0", "r", 0.0, lock_wait=0.2)):
+            with pytest.raises(CineRecastError, match="another cine-recast command is writing the ledger"):
+                call()
+    assert ProjectPaths(tmp_path).ledger_file.read_bytes() == before
+    issue(tmp_path, "j1", "b", 1.0)                                    # the lock is free again
+    assert (tmp_path / "ledger.lock").is_file()
+
+
+def test_two_threads_against_a_limit_for_one_issue_exactly_one(tmp_path, monkeypatch):
+    approve(tmp_path, "b", 10.0, "owner")
+    real_events = ledger_module._events
+
+    def slow_events(root):
+        events = real_events(root)
+        time.sleep(0.3)                                                # widen the read-to-append window
+        return events
+
+    monkeypatch.setattr(ledger_module, "_events", slow_events)
+    barrier = threading.Barrier(2)
+    results: dict[str, str] = {}
+
+    def run(job):
+        barrier.wait()
+        try:
+            issue(tmp_path, job, "b", 6.0)
+            results[job] = "issued"
+        except CineRecastError as exc:
+            results[job] = exc.message
+
+    threads = [threading.Thread(target=run, args=(job,)) for job in ("j1", "j2")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert list(results.values()).count("issued") == 1
+    assert any("limit" in r for r in results.values()) and batch_status(tmp_path, "b")["committed"] == 6.0
+
+
+def test_audit_totals_over_batches(tmp_path):
+    approve(tmp_path, "a", 10.0, "owner"); approve(tmp_path, "b", 5.5, "owner")
+    issue(tmp_path, "j1", "a", 4.0); issue(tmp_path, "j2", "b", 2.0); done(tmp_path, "j2", "p", 1.5)
+    assert audit(tmp_path)["totals"] == {"limit": 15.5, "committed": 5.5, "remaining": 10.0}
 
 
 def test_job_states(tmp_path):

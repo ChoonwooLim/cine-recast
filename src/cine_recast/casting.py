@@ -210,6 +210,24 @@ def check(root: Path) -> list[str]:
     return problems
 
 
+def not_applicable_holds(root: Path) -> bool:
+    """True when likeness_consent "not_applicable" is verified for casting.json as it is now: every
+    image of every person swap is a file this project generated for that element without reference
+    images (also when no person is replaced). False when casting.json cannot be read or checked."""
+    try:
+        data = load(root)
+    except CineRecastError:
+        return False
+    if not isinstance(data, dict) or not isinstance(data.get("elements"), list) or not isinstance(data.get("swaps"), list):
+        return False
+    persons = {e["id"] for e in data["elements"]
+               if isinstance(e, dict) and e.get("kind") == "person" and isinstance(e.get("id"), str)}
+    images = [(swap["element"], image) for swap in data["swaps"]
+              if isinstance(swap, dict) and isinstance(swap.get("element"), str) and swap["element"] in persons
+              and isinstance(swap.get("images"), list) for image in swap["images"]]
+    return _virtual_person_problem(Path(root), images) is None
+
+
 def swapped_shots(root: Path, kind: str) -> set[int]:
     """The shots of the elements of `kind` that have a swap in casting.json as it is now.
 

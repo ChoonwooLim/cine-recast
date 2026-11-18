@@ -111,10 +111,11 @@ def issue_in_order(root: Path, batch: str, queue: list[dict], payload_of: Callab
                    save: Callable[[], None], *, noun: str, command: str) -> list[dict]:
     """Hand each queued entry to ledger.issue in order and return the payloads to run.
 
-    Each entry must still have the payload its quote priced. An entry the ledger accepts becomes
-    issued, keeps the params it was sent with (sent_params) and is saved at once. Stops with
-    IssueRefused at the first entry refused; the entries issued before it stay issued and travel
-    on the exception.
+    Each entry must still have the payload its quote priced. The params it will be sent with
+    (sent_params) are saved before the ledger is asked, so an entry the ledger issued just before a
+    save failed still shows them; if the ledger refuses, they are removed and saved again. An entry
+    the ledger accepts becomes issued and is saved at once. Stops with IssueRefused at the first
+    entry refused; the entries issued before it stay issued and travel on the exception.
     """
     issued: list[dict] = []
 
@@ -127,12 +128,15 @@ def issue_in_order(root: Path, batch: str, queue: list[dict], payload_of: Callab
         stale = stale_quote(entry, payload, noun=noun, command=command)
         if stale:
             raise refused(entry, stale)
+        entry["sent_params"] = payload["params"]
+        save()
         try:
             ledger.issue(root, entry["id"], batch, entry.get("est_credits"))
         except CineRecastError as exc:
+            del entry["sent_params"]
+            save()
             raise refused(entry, exc.message) from exc
         entry["state"] = "issued"
-        entry["sent_params"] = payload["params"]
         save()
         issued.append(payload)
     return issued

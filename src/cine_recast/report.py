@@ -5,6 +5,7 @@ from pathlib import Path
 from cine_recast import ledger, plan
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.casting import load as load_casting
+from cine_recast.casting import not_applicable_holds
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import read_project_json
 from cine_recast.paths import ProjectPaths
@@ -59,6 +60,8 @@ def _summary(root: Path) -> list[str]:
 
 
 def _rights(root: Path) -> list[str]:
+    """One line per rights item; an answer other than "yes" is marked as needing confirmation,
+    except a likeness_consent "not_applicable" that casting.not_applicable_holds verifies."""
     rights = load_project(root).get("rights") or {}
     lines = ["## 권리 확인", ""]
     for item in RIGHTS_ITEMS:
@@ -68,7 +71,9 @@ def _rights(root: Path) -> list[str]:
         line = f"- {_RIGHTS_LABELS[item]} ({item}): {answer or '미응답'}"
         if note:
             line += f" - {note}"
-        if answer != "yes":
+        if item == "likeness_consent" and answer == "not_applicable" and not_applicable_holds(root):
+            line += " (도구 확인: 교체하는 인물이 없거나, 모두 참조 이미지 없이 이 프로젝트에서 생성한 가상 인물이다)"
+        elif answer != "yes":
             line += " 확인 필요"
         lines.append(line)
     return [*lines, ""]
@@ -135,12 +140,12 @@ def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], li
 def _cost(root: Path) -> list[str]:
     audit = ledger.audit(root)
     lines = ["## 비용", "", "| 묶음 | 한도 | 사용 | 잔액 |", "| --- | --- | --- | --- |"]
-    for name, st in audit["batches"].items():
+    for name, st in [*audit["batches"].items(), ("합계", audit["totals"])]:
         lines.append(f"| {_cell(name)} | {_num(st['limit'], 2)} | {_num(st['committed'], 2)} | {_num(st['remaining'], 2)} |")
-    if not audit["batches"]:
-        lines.append("| - | - | - | - |")
+    ids = ", ".join(_cell(pid) for pid in audit["provider_ids"]) or "없음"
     lines += ["", f"- 장부 점검: {'이상 없음' if audit['ok'] else '문제 있음'}"]
     lines += [f"  - {problem}" for problem in audit["problems"]]
+    lines += [f"- 끝난 작업의 Higgsfield 작업 id: {ids}"]
     return [*lines, ""]
 
 

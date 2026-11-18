@@ -76,6 +76,10 @@ class ProjectPaths:
         return self.root / "ledger.jsonl"
 
     @property
+    def ledger_lock(self) -> Path:
+        return self.root / "ledger.lock"
+
+    @property
     def assets_file(self) -> Path:
         return self.root / "assets.json"
 

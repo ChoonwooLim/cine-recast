@@ -130,6 +130,7 @@ def test_a_ledger_refusal_removes_the_stored_files(assets3, tmp_path):
     with pytest.raises(CineRecastError, match="never issued"):
         record_done(assets3.root, "a0001", "prov-1", 1.0, [png(tmp_path / "x.png")])
     assert not any(assets3.asset_dir("hero").iterdir()) and "a0001" not in job_states(assets3.root)
+    assert read_json(assets3.assets_file)["assets"][0]["files"] == []          # the listed files are taken back
 
 
 def test_a_stored_file_is_never_overwritten(assets3, tmp_path):
@@ -297,6 +298,65 @@ def test_a_damaged_assets_file_is_named(assets3, text, fragment):
     with pytest.raises(CineRecastError, match=fragment) as refused:
         list_assets(assets3.root)
     assert refused.value.message.startswith("assets.json")
+
+
+# --- final-review wave: crash windows, and one batch for a video job and an asset ---
+
+def _boom(*args, **kwargs):
+    raise OSError("simulated crash while saving")
+
+
+def _crash_after(monkeypatch, name):
+    """Make assets.json saves fail once the ledger function `name` has written its line."""
+    import cine_recast.assets as assets_module
+    import cine_recast.ledger as ledger_module
+
+    real = getattr(ledger_module, name)
+
+    def then_crash(*args, **kwargs):
+        record = real(*args, **kwargs)
+        monkeypatch.setattr(assets_module, "_save", _boom)
+        return record
+
+    monkeypatch.setattr(ledger_module, name, then_crash)
+
+
+def test_sent_params_survive_a_save_that_fails_after_the_ledger_issued(assets3, monkeypatch):
+    _issued(assets3.root, "hero")
+    [before] = list_assets(assets3.root)
+    _crash_after(monkeypatch, "issue")
+    with pytest.raises(OSError):
+        issue_next(assets3.root, "assets-1")
+    monkeypatch.undo()
+    [after] = list_assets(assets3.root)
+    assert after["state"] == "issued" and after["params"] == before["params"]
+
+
+def test_files_survive_a_save_that_fails_after_the_ledger_recorded_done(assets3, tmp_path, monkeypatch):
+    root = assets3.root
+    _issued(root, "hero")
+    issue_next(root, "assets-1")
+    _crash_after(monkeypatch, "done")
+    with pytest.raises(OSError):
+        record_done(root, "a0001", "prov-1", 6.0, [png(tmp_path / "x.png")])
+    monkeypatch.undo()
+    [listed] = list_assets(root)
+    assert (listed["state"], listed["files"]) == ("done", ["assets/hero/a0001_1.png"])
+    use(root, "hero", "assets/hero/a0001_1.png")                               # the paid image is not stranded
+    assert check(root) == []
+
+
+def test_a_video_job_and_an_asset_share_one_batch_limit(planned3, capsys):
+    root = planned3.root
+    write_json(planned3.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL]})
+    add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="b")
+    set_cost(root, "a0001", 6.0); set_job_cost(root, "j0001", 40.0); approve(root, "b", 42.0, "owner")
+    assert [a["job_id"] for a in issue_next(root, "b")] == ["a0001"]
+    capsys.readouterr()
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 2
+    out = capsys.readouterr()
+    assert json.loads(out.out) == [] and "j0001" in out.err and "limit" in out.err
+    assert audit(root)["batches"]["b"] == {"limit": 42.0, "committed": 6.0, "remaining": 36.0}
 
 
 def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):

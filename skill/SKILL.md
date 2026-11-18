@@ -33,6 +33,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 종료 코드 0은 성공, 2는 거부 또는 잘못된 입력이다. 2가 나오면 `error:`로 시작하는 줄(검사 명령은 문제 목록)을 읽고 거기 적힌 대로 조치한다. 거부는 고장이 아니라 안전장치다. 프로젝트 파일을 손으로 고쳐 우회하지 않는다. 손으로 쓴 JSON 파일이 깨졌으면 그 줄이 파일 이름과 줄, 칸을 알려 준다.
 - 종료 코드 1은 도구 자체의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast`). 멈추고 그 줄을 그대로 사용자에게 알린다. 다른 방법으로 돌아가거나 파일을 고쳐 피하지 않는다.
 - PowerShell에서 쉼표가 든 값은 따옴표로 감싼다(`--cuts "88,130"`). 감싸지 않으면 인자 여러 개로 쪼개진다.
+- 도구의 명령은 한 번에 하나씩 실행하고, 여러 개를 동시에 돌리지 않는다. 장부는 잠금으로 지켜지지만(`another cine-recast command is writing the ledger`가 나오면 다른 명령이 장부를 쓰는 중이다) `plan.json`과 `assets.json` 같은 계획과 자료 파일은 잠기지 않아 동시에 고치면 한쪽의 변경이 사라진다.
 - `--version`이 `cine-recast 0.1.0` 같은 줄을 내지 않으면 도구가 설치되지 않은 것이다. cine-recast 저장소 폴더에서 `pwsh -NoProfile -File install.ps1`을 실행해야 한다고 사용자에게 알린다.
 
 ## 규칙
@@ -240,8 +241,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - `assemble`: `out/final.mp4`(완성본)와 `out/master.mov`(ProRes 마스터). 소리는 없다. 사용자가 새로 만든 오디오 파일을 주면 `--audio`로 넣는다.
 - `compare`: `out/compare.mp4`. 왼쪽이 원본, 오른쪽이 결과다. 원본의 화면과 소리가 들어 있으므로 검토용으로만 쓴다.
-- `report`: `out/report.md`. 권리 확인, 교체표, 숏별 점수, 묶음별 비용, 열린 항목.
-- `audit`: 장부 점검. `ok`가 `true`인지 보고, `provider_ids`와 묶음별 사용액을 Higgsfield 사용 내역과 대조한다(generation-jobs.md).
+- `report`: `out/report.md`. 권리 확인, 교체표, 숏별 점수, 묶음별 비용과 합계, 끝난 작업의 Higgsfield 작업 id 목록, 열린 항목. 작업 id 목록은 Higgsfield 사용 내역과 하나씩 대조한다.
+- `audit`: 장부 점검. `ok`가 `true`인지 보고, `provider_ids`와 묶음별 사용액, 모든 묶음의 합계(`totals`)를 Higgsfield 사용 내역과 대조한다(generation-jobs.md).
 
 사용자에게 네 파일의 경로, 숏별 판정, 남은 문제(`retry`인 숏, 화면이 원본과 거의 같아 열린 항목에 적힌 숏, "확인 필요"로 남은 권리 항목), 쓴 크레딧을 알린다. 최종 합격은 사용자가 비교 영상을 보고 판단한다.
 

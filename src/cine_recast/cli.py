@@ -200,7 +200,9 @@ def _cmd_approve(args: argparse.Namespace) -> int:
     root = Path(args.project)
     load_project(root)  # never start a ledger outside a project folder
     record = ledger.approve(root, args.batch, args.limit, args.by, args.note)
-    print(f"approved batch {record['batch']}: limit {record['limit_credits']} credits (by {record['by']})")
+    status = ledger.batch_status(root, record["batch"])
+    print(f"approved batch {record['batch']}: +{record['limit_credits']} credits, limit now {status['limit']}, "
+          f"committed {status['committed']}, remaining {status['remaining']} (by {record['by']})")
     return 0
 
 
