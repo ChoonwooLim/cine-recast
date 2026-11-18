@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, assemble, conform, ledger, plan, qc, report, takes
+from . import __version__, assemble, assets, conform, ledger, plan, qc, report, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -130,6 +130,55 @@ def _cmd_jobs_done(args: argparse.Namespace) -> int:
 def _cmd_jobs_fail(args: argparse.Namespace) -> int:
     plan.record_fail(Path(args.project), args.job, args.reason, args.credits)
     print(f"{args.job}: failed")
+    return 0
+
+
+def _cmd_assets_add(args: argparse.Namespace) -> int:
+    refs = [Path(ref) for ref in args.ref or []]
+    asset = assets.add(Path(args.project), element=args.element, prompt=args.prompt, model=args.model,
+                       batch=args.batch, aspect_ratio=args.aspect_ratio, count=args.count, refs=refs)
+    print(asset["id"])
+    return 0
+
+
+def _cmd_assets_list(args: argparse.Namespace) -> int:
+    _print_json(assets.list_assets(Path(args.project)))
+    return 0
+
+
+def _cmd_assets_set_cost(args: argparse.Namespace) -> int:
+    asset = assets.set_cost(Path(args.project), args.asset, args.credits)
+    print(f"{asset['id']}: quoted {asset['est_credits']} credits")
+    return 0
+
+
+def _cmd_assets_next(args: argparse.Namespace) -> int:
+    try:
+        issued = assets.issue_next(Path(args.project), args.batch)
+    except plan.IssueRefused as exc:
+        _print_json(exc.issued)  # assets issued before the refusal must reach the agent
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 2
+    _print_json(issued)
+    return 0
+
+
+def _cmd_assets_done(args: argparse.Namespace) -> int:
+    result = assets.record_done(Path(args.project), args.asset, args.provider_id, args.credits,
+                                [Path(file) for file in args.file])
+    print(f"{args.asset}: done, files {', '.join(result['files'])}")
+    return 0
+
+
+def _cmd_assets_fail(args: argparse.Namespace) -> int:
+    assets.record_fail(Path(args.project), args.asset, args.reason, args.credits)
+    print(f"{args.asset}: failed")
+    return 0
+
+
+def _cmd_assets_use(args: argparse.Namespace) -> int:
+    assets.use(Path(args.project), args.element, args.image)
+    print(f"{args.element}: swap image {args.image}")
     return 0
 
 
@@ -283,6 +332,53 @@ def _build_parser() -> argparse.ArgumentParser:
     jobs_fail.add_argument("--reason", required=True)
     jobs_fail.add_argument("--credits", type=float, default=0.0)
     jobs_fail.set_defaults(func=_cmd_jobs_fail)
+
+    assets_p = sub.add_parser("assets", help="generated swap images (assets.json)")
+    assets_sub = assets_p.add_subparsers(dest="assets_command")
+    assets_add = assets_sub.add_parser("add", help="plan an image-generation job for an element")
+    assets_add.add_argument("project", help="project folder")
+    assets_add.add_argument("--element", required=True, help="element id from casting.json")
+    assets_add.add_argument("--prompt", required=True, help="English description of the image")
+    assets_add.add_argument("--model", required=True, help="image model id from models.json")
+    assets_add.add_argument("--batch", required=True, help="approval batch of the asset")
+    assets_add.add_argument("--aspect-ratio", default=None,
+                            help="W:H offered by the model (default: nearest the picture for a background, "
+                                 "else the model's first)")
+    assets_add.add_argument("--count", type=int, default=1, help=f"images to generate, 1 to {assets.MAX_COUNT}")
+    assets_add.add_argument("--ref", action="append",
+                            help="reference image (repeatable; a relative path is relative to the project folder)")
+    assets_add.set_defaults(func=_cmd_assets_add)
+    assets_list = assets_sub.add_parser("list", help="print the assets and the params each is sent with, as JSON")
+    assets_list.add_argument("project", help="project folder")
+    assets_list.set_defaults(func=_cmd_assets_list)
+    assets_cost = assets_sub.add_parser("set-cost", help="record an asset's quoted cost")
+    assets_cost.add_argument("project", help="project folder")
+    assets_cost.add_argument("--asset", required=True)
+    assets_cost.add_argument("--credits", required=True, type=float)
+    assets_cost.set_defaults(func=_cmd_assets_set_cost)
+    assets_next = assets_sub.add_parser("next", help="issue the batch's quoted assets through the ledger")
+    assets_next.add_argument("project", help="project folder")
+    assets_next.add_argument("--batch", required=True)
+    assets_next.set_defaults(func=_cmd_assets_next)
+    assets_done = assets_sub.add_parser("done", help="record a finished asset and store its images")
+    assets_done.add_argument("project", help="project folder")
+    assets_done.add_argument("--asset", required=True)
+    assets_done.add_argument("--provider-id", required=True)
+    assets_done.add_argument("--credits", required=True, type=float)
+    assets_done.add_argument("--file", required=True, action="append", help="returned image (repeatable)")
+    assets_done.set_defaults(func=_cmd_assets_done)
+    assets_fail = assets_sub.add_parser("fail", help="record a failed asset")
+    assets_fail.add_argument("project", help="project folder")
+    assets_fail.add_argument("--asset", required=True)
+    assets_fail.add_argument("--reason", required=True)
+    assets_fail.add_argument("--credits", type=float, default=0.0)
+    assets_fail.set_defaults(func=_cmd_assets_fail)
+    assets_use = assets_sub.add_parser("use", help="make a generated image the element's swap in casting.json")
+    assets_use.add_argument("project", help="project folder")
+    assets_use.add_argument("--element", required=True)
+    assets_use.add_argument("--image", required=True, help="one of the element's generated files, e.g. "
+                                                           "assets/hero/a0001_1.png")
+    assets_use.set_defaults(func=_cmd_assets_use)
 
     approve = sub.add_parser("approve", help="record a credit approval for a batch")
     approve.add_argument("project", help="project folder")

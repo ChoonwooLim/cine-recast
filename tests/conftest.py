@@ -155,26 +155,43 @@ def analyzed3(_analyzed3_template, tmp_path):
     return ProjectPaths(root)
 
 
-def good_casting(root: Path, tmp_path: Path) -> None:
-    """Write a valid casting.json with generated 1x1 PNG images and answer all three rights items."""
+CAST_ELEMENTS = [
+    {"id": "hero", "kind": "person", "name": "Rider", "shots": [1, 3],
+     "look": "teenage boy, tousled brown hair, green wool tunic, dark leather vest"},
+    {"id": "sky_battle", "kind": "background", "name": "Sky around the giant", "shots": [1, 3],
+     "look": "grey-green smoke, falling rock debris, overcast light"},
+]
+
+
+def png(path: Path) -> Path:
+    """Write a 1x1 PNG at path (making its folder) and return the path."""
     from PIL import Image
 
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1, 1), (128, 128, 128)).save(path)
+    return path
+
+
+def run_cli(commands: list[list]) -> None:
+    """Run each command through the CLI in order (arguments may be paths); each must exit with 0."""
+    from cine_recast.cli import main
+
+    for command in commands:
+        args = [str(arg) for arg in command]
+        assert main(args) == 0, f"cine-recast {' '.join(args)} did not exit with 0"
+
+
+def good_casting(root: Path, tmp_path: Path) -> None:
+    """Write a valid casting.json with generated 1x1 PNG images and answer all three rights items."""
     from cine_recast.jsonio import write_json
     from cine_recast.paths import ProjectPaths
     from cine_recast.project import RIGHTS_ITEMS, set_right
 
     refs = Path(tmp_path) / "refs"
-    refs.mkdir(parents=True, exist_ok=True)
-    person, background = refs / "person_front.png", refs / "background.png"
-    for image in (person, background):
-        Image.new("RGB", (1, 1), (128, 128, 128)).save(image)
+    person, background = png(refs / "person_front.png"), png(refs / "background.png")
     write_json(ProjectPaths(Path(root)).casting_file, {
-        "elements": [
-            {"id": "hero", "kind": "person", "name": "Rider", "shots": [1, 3],
-             "look": "teenage boy, tousled brown hair, green wool tunic, dark leather vest"},
-            {"id": "sky_battle", "kind": "background", "name": "Sky around the giant", "shots": [1, 3],
-             "look": "grey-green smoke, falling rock debris, overcast light"},
-        ],
+        "elements": CAST_ELEMENTS,
         "swaps": [
             {"element": "hero", "images": [person.as_posix()], "note": ""},
             {"element": "sky_battle", "images": [background.as_posix()], "note": ""},
@@ -209,6 +226,56 @@ def write_models(root: Path, **overrides) -> None:
     from cine_recast.paths import ProjectPaths
 
     write_json(ProjectPaths(Path(root)).models_file, {"models": [{**EXAMPLE_MODEL, **overrides}]})
+
+
+IMAGE_MODEL = {
+    "id": "image_model_x", "kind": "image", "aspect_ratios": ["1:1", "3:4", "16:9", "21:9"],
+    "resolutions": ["1k", "2k"], "image_refs": 4, "read_at": "2026-11-18",
+}
+
+
+@pytest.fixture(scope="session")
+def _assets3_template(tmp_path_factory, _analyzed3_template) -> Path:
+    """analyzed3 + the elements without swaps + a video and an image model + rights for generated
+    swaps (reference and background "yes", likeness "not_applicable"), built once per session."""
+    import shutil
+
+    from cine_recast.jsonio import write_json
+    from cine_recast.paths import ProjectPaths
+    from cine_recast.project import set_right
+
+    root = tmp_path_factory.mktemp("assets3") / "p"
+    shutil.copytree(_analyzed3_template, root)
+    pp = ProjectPaths(root)
+    write_json(pp.casting_file, {"elements": CAST_ELEMENTS, "swaps": []})
+    write_json(pp.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL]})
+    set_right(root, "reference_rights", "yes")
+    set_right(root, "background_rights", "yes")
+    set_right(root, "likeness_consent", "not_applicable")
+    return root
+
+
+@pytest.fixture
+def assets3(_assets3_template, tmp_path):
+    """An isolated copy of the asset project: elements hero (person) and sky_battle (background), no swaps."""
+    return _copy_project(_assets3_template, tmp_path)
+
+
+def generate_and_use(root: Path, element: str, tmp_path: Path) -> str:
+    """Run one asset of `element` through add, set-cost, approve, issue and done, put its image in
+    the swap table with assets.use, and return that image's project-relative path."""
+    from cine_recast import assets, ledger
+
+    batch = f"gen-{element}"
+    asset = assets.add(root, element=element, prompt="A generated stand-in in neutral studio light.",
+                       model="image_model_x", batch=batch)
+    assets.set_cost(root, asset["id"], 1.0)
+    ledger.approve(root, batch, 1.0, "owner")
+    assets.issue_next(root, batch)
+    image = png(Path(tmp_path) / "generated" / f"{asset['id']}.png")
+    stored = assets.record_done(root, asset["id"], "prov-gen", 1.0, [image])["files"][0]
+    assets.use(root, element, stored)
+    return stored
 
 
 def set_prompt(root: Path, unit_id: str, text: str) -> None:

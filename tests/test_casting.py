@@ -1,7 +1,7 @@
 import shutil
 
 import pytest
-from conftest import good_casting
+from conftest import generate_and_use, good_casting, png
 
 from cine_recast.casting import check, swaps_for_shots, write_template
 from cine_recast.jsonio import read_json, write_json
@@ -65,3 +65,19 @@ def test_relative_swap_images_resolve_against_the_project(analyzed3, tmp_path, m
     c["swaps"][0]["images"] = ["cwd_only.png"]                          # only found from the working folder
     write_json(analyzed3.casting_file, c)
     assert any("not found" in p for p in check(analyzed3.root))
+
+
+def test_not_applicable_consent_does_not_cover_an_outside_photo(analyzed3, tmp_path):
+    good_casting(analyzed3.root, tmp_path)  # the hero image is a file from outside the project
+    set_right(analyzed3.root, "likeness_consent", "not_applicable")
+    assert any("likeness_consent" in p for p in check(analyzed3.root))
+
+
+def test_not_applicable_consent_needs_every_person_image_generated(assets3, tmp_path):
+    generate_and_use(assets3.root, "hero", tmp_path)
+    c = read_json(assets3.casting_file)
+    c["swaps"][0]["images"].append(png(tmp_path / "photo.png").as_posix())
+    write_json(assets3.casting_file, c)
+    assert any("likeness_consent" in p for p in check(assets3.root))
+    set_right(assets3.root, "likeness_consent", "yes")
+    assert check(assets3.root) == []

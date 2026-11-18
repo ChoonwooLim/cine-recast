@@ -12,7 +12,7 @@ from cine_recast.textrules import han_chars, is_english_prompt
 
 ELEMENT_KINDS = ("person", "creature", "prop", "background")
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
-_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
+ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
 _STILL_LABELS = ("first", "mid", "last")
 
 
@@ -57,8 +57,26 @@ def _answer(rights: dict, item: str) -> str | None:
     return entry.get("answer") if isinstance(entry, dict) else None
 
 
+def _not_generated(root: Path, images: list[tuple[str, object]]) -> list[tuple[str, object]]:
+    """The (element, image) pairs whose image is not one of the element's generated files."""
+    from cine_recast.assets import generated_files  # assets imports this module
+
+    generated: dict[str, set[Path]] = {}
+    outside = []
+    for element, image in images:
+        if element not in generated:
+            generated[element] = {(root / name).resolve() for name in generated_files(root, element)}
+        if not isinstance(image, str) or (root / image).resolve() not in generated[element]:
+            outside.append((element, image))
+    return outside
+
+
 def check(root: Path) -> list[str]:
-    """Problems found in casting.json as English sentences. An empty list means it is valid."""
+    """Problems found in casting.json as English sentences. An empty list means it is valid.
+
+    A person swap needs likeness_consent "yes", or "not_applicable" when every image of every
+    person swap is a file this project generated for that element (a virtual person).
+    """
     root = Path(root)
     data = load(root)
     rights = load_project(root).get("rights", {})
@@ -82,7 +100,7 @@ def check(root: Path) -> list[str]:
             continue
         eid = element.get("id")
         label = f"element {eid!r}" if isinstance(eid, str) and eid else f"elements[{position}]"
-        if not isinstance(eid, str) or not _ID_PATTERN.match(eid):
+        if not isinstance(eid, str) or not ID_PATTERN.match(eid):
             problems.append(f"{label}: id must match ^[a-z][a-z0-9_]{{1,23}}$.")
         elif eid in ids:
             problems.append(f"{label}: duplicate element id.")
@@ -105,6 +123,7 @@ def check(root: Path) -> list[str]:
 
     swapped: set[str] = set()
     swapped_kinds: set[str] = set()
+    person_images: list[tuple[str, object]] = []  # (element, image) for every image of a person swap
     for position, swap in enumerate(swaps):
         if not isinstance(swap, dict):
             problems.append(f"swaps[{position}] must be an object.")
@@ -123,6 +142,8 @@ def check(root: Path) -> list[str]:
         if not isinstance(images, list) or not images:
             problems.append(f"{label}: images must list at least one image file.")
             continue
+        if name in ids and ids[name].get("kind") == "person":
+            person_images += [(name, image) for image in images]
         for image in images:
             path = Path(image) if isinstance(image, str) else None
             if path is None or path.suffix.lower() not in IMAGE_SUFFIXES:
@@ -130,7 +151,15 @@ def check(root: Path) -> list[str]:
             elif not (root / path).is_file():  # a relative path is relative to the project folder
                 problems.append(f"{label}: image file not found: {image}")
 
-    if "person" in swapped_kinds and _answer(rights, "likeness_consent") != "yes":
+    consent = _answer(rights, "likeness_consent")
+    if "person" in swapped_kinds and consent == "not_applicable":
+        outside = _not_generated(root, person_images)
+        if outside:
+            element, image = outside[0]
+            problems.append(f"A person is replaced with an image this project did not generate (swap for "
+                            f"{element!r}: {image!r}), so likeness_consent 'not_applicable' does not hold; "
+                            "record consent with: rights set --item likeness_consent --answer yes")
+    elif "person" in swapped_kinds and consent != "yes":
         problems.append("A person is replaced but likeness_consent is not answered 'yes'; "
                         "record it with: rights set --item likeness_consent --answer yes")
     if "background" in swapped_kinds and _answer(rights, "background_rights") is None:

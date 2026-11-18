@@ -56,6 +56,13 @@ class ProjectPaths:
     def ledger_file(self) -> Path:
         return self.root / "ledger.jsonl"
 
+    @property
+    def assets_file(self) -> Path:
+        return self.root / "assets.json"
+
+    def asset_dir(self, element: str) -> Path:
+        return self.root / "assets" / element
+
     def take_dir(self, unit_id: str, take_id: str) -> Path:
         return self.root / "takes" / unit_id / take_id
 
