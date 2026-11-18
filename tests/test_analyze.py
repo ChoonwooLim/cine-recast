@@ -108,3 +108,55 @@ def test_cli_flow(tmp_path, clip3):
     assert main(["init", str(root), "--reference", str(clip3), "--name", "t"]) == 0
     assert main(["analyze", str(root), "--cuts", "30,54"]) == 0
     assert main(["cuts", "review", str(root)]) == 0
+
+
+# --- task 20 (E): the timing of the reference's sound ---
+
+def _clicks_clip(path):
+    """Two shots (testsrc2 30 frames, smptebars 42 frames, 24 fps) with a sound that is silent except
+    for 5 ms bursts of a 2 kHz tone starting exactly at frames 10, 30 and 55, the loudest at 55."""
+    from conftest import _encode_args, _run
+
+    bursts = "+".join(rf"{level}*between(t\,{frame}/24\,{frame}/24+0.005)" for frame, level in
+                      ((10, 0.5), (30, 0.2), (55, 0.9)))
+    _run(["-f", "lavfi", "-i", "testsrc2=size=384x216:rate=24", "-f", "lavfi", "-i", "smptebars=size=384x216:rate=24",
+          "-f", "lavfi", "-i", f"aevalsrc=({bursts})*sin(2*PI*2000*t):s=48000:d=3",
+          "-filter_complex", "[0:v]trim=end_frame=30,setpts=PTS-STARTPTS,format=yuv420p[a];"
+                             "[1:v]trim=end_frame=42,setpts=PTS-STARTPTS,format=yuv420p[b];[a][b]concat=n=2:v=1:a=0[v]",
+          "-map", "[v]", "-map", "2:a", "-c:a", "aac", "-b:a", "192k", "-t", "3", *_encode_args(path)])
+    return path
+
+
+def test_analyze_reports_the_hits_of_the_reference_sound(tmp_path):
+    from cine_recast.project import init_project
+
+    pp = init_project(tmp_path / "p", _clicks_clip(tmp_path / "clicks.mp4"), "t")
+    analyze(pp.root)
+    data = read_json(pp.audio_file)
+    assert (data["has_audio"], data["frames"], len(data["rms_db"])) == (True, 72, 72)
+    assert data["hits"] == [55, 10, 30]                                 # strongest first
+    assert min(data["rms_db"][f] for f in (10, 30, 55)) > -40 and data["rms_db"][20] <= -80
+    assert min(data["rms_db"]) >= -90
+    assert [(s["shot"], s["start"], s["end"], s["hits"]) for s in data["shots"]] == [(1, 0, 30, [10]),
+                                                                                  (2, 30, 72, [30, 55])]
+    assert all(-90 <= s["mean_db"] < -20 for s in data["shots"])
+    assert [read_json(pp.sheet_file(n))["audio_hits"] for n in (1, 2)] == [[10], [30, 55]]
+
+
+def test_a_silent_reference_has_no_audio_map(project3):
+    analyze(project3.root)                                              # clip3 has no audio stream
+    assert read_json(project3.audio_file) == {"has_audio": False, "frames": 90, "rms_db": [], "hits": [], "shots": []}
+    assert all(read_json(project3.sheet_file(n))["audio_hits"] == [] for n in (1, 2, 3))
+
+
+def test_onsets_are_spaced_and_limited():
+    from cine_recast.audiomap import onsets
+
+    levels = [-90.0] * 60
+    levels[10], levels[13] = -30.0, -5.0           # jumps of 60 and 75 dB, 3 frames apart: the stronger wins
+    assert onsets(levels) == [13]
+    levels = [-90.0] * 500
+    for n in range(45):                             # 45 jumps 10 frames apart, each 1 dB stronger than the last
+        levels[5 + 10 * n] = -60.0 + n
+    assert onsets(levels) == [5 + 10 * n for n in range(44, 4, -1)]     # the 40 strongest, strongest first
+    assert onsets([-90.0, -85.0, -82.0]) == []      # jumps below 9 dB

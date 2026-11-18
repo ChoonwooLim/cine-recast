@@ -1,10 +1,12 @@
-"""Run the analysis of a project's reference video: picture area, cuts, one folder per shot."""
+"""Run the analysis of a project's reference video: picture area, cuts, one folder per shot, and
+the timing of its sound (analysis/audio.json, see audiomap.py: levels and hit frames, never sound)."""
 
 import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from cine_recast.audiomap import audio_map, no_audio
 from cine_recast.cuts import Shot, detect_cuts, shots_from_cuts
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import VideoInfo, cut_frames, extract_still, iter_frames, probe
@@ -60,11 +62,14 @@ def load_shots(root: Path) -> list[Shot]:
 
 def analyze(root: Path, *, cuts: list[int] | None = None,
             picture: tuple[int, int, int, int] | None = None) -> dict:
-    """Write analysis/video.json, cuts.json and one folder per shot (clip, stills, measured sheet).
+    """Write analysis/video.json, cuts.json, audio.json and one folder per shot (clip, stills,
+    measured sheet with the shot's audio_hits).
 
     `cuts` replaces cut detection and `picture` (x, y, w, h) the picture-area detection; video.json
     records the area's source as picture_source "given" or "detected" (a project analysed before the
-    key existed reads as "detected"). Re-running replaces the shots. Refused once a plan exists.
+    key existed reads as "detected"). audio.json holds the timing of the reference's sound
+    (audiomap.audio_map), or has_audio false and empty lists without an audio stream. Re-running
+    replaces the shots. Refused once a plan exists.
     """
     root = Path(root)
     pp = ProjectPaths(root)
@@ -91,6 +96,9 @@ def analyze(root: Path, *, cuts: list[int] | None = None,
         "pix_fmt": info.pix_fmt, "picture_box": box.to_dict(), "picture_source": picture_source,
     })
     write_json(pp.cuts_file, {"cuts": cut_list, "source": source})
+    timing = audio_map(ref, info, shots) if info.has_audio else no_audio(info, shots)
+    write_json(pp.audio_file, timing)
+    hits_by_shot = {entry["shot"]: entry["hits"] for entry in timing["shots"]}
 
     shots_dir = pp.analysis_dir / "shots"
     if shots_dir.exists():
@@ -109,7 +117,7 @@ def analyze(root: Path, *, cuts: list[int] | None = None,
             "stills": {label: f"stills/{label}.png" for label in stills},
             "camera": measures["camera"], "color": measures["color"], "flicker": measures["flicker"],
             "elements": [], "pose": None, "depth": None, "mattes": None,
-            "audio_hits": [], "dialogue": [],
+            "audio_hits": hits_by_shot.get(shot.index, []), "dialogue": [],
         })
     return {"shots": len(shots), "cuts": cut_list, "picture_box": box.to_dict()}
 
