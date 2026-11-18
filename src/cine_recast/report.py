@@ -16,6 +16,7 @@ _RIGHTS_LABELS = {
     "background_rights": "배경 사용 권리",
 }
 _NONE = "-"
+_SKIPPED = "(제외)"    # marks a score left out of the verdict
 COPY_OVERLAP = 0.98     # a selected shot at this overlap_ratio or more is listed for a look (not a verdict)
 
 
@@ -23,6 +24,15 @@ def _num(value, digits: int = 3) -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return _NONE
     return f"{value:.{digits}f}"
+
+
+def _judged(score: dict, name: str) -> str:
+    """A judged score, followed by _SKIPPED when it was left out of the shot's verdict."""
+    text = _num(score.get(name))
+    skipped = score.get("skipped")
+    if text != _NONE and isinstance(skipped, list) and name in skipped:
+        text += f" {_SKIPPED}"
+    return text
 
 
 def _cell(value) -> str:
@@ -115,9 +125,10 @@ def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], li
         row = (shot.index, f"{shot.start}-{shot.end}",
                item["id"] if item else None, item.get("method") if item else None,
                item.get("model") if item else None, item.get("selected_take") if item else None,
-               _num(score.get("camera")), _num(score.get("motion")), _num(score.get("color")),
-               _num(score.get("flicker_ratio")), _num(score.get("overlap_ratio")), score.get("verdict"))
+               *(_judged(score, name) for name in ("camera", "motion", "color", "flicker_ratio")),
+               _num(score.get("overlap_ratio")), score.get("verdict"))
         lines.append("| " + " | ".join(_cell(v) for v in row) + " |")
+    lines += ["", f"- 점수 뒤의 {_SKIPPED}는 판정에서 뺀 점수다. 교체가 그 점수를 당연히 바꾸기 때문에 판정에 넣지 않았다."]
     return [*lines, ""], retry, copies
 
 

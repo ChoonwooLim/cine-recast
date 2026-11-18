@@ -386,7 +386,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 쓰는 것: `takes/<단위>/<테이크>/scores.json`. 출력도 같은 JSON이다(아래 "점수 읽기").
-- 거부: `conform`을 하지 않았다.
+- 기준은 `project.json`의 `thresholds`에서 읽는다. 판정에서 빼는 점수는 숏마다 정한다. `casting.json`에서 교체가 있는 `background` 요소가 나오는 숏은 `color`가 자동으로 빠지고, 단위의 `qc_skip`은 그 위에 더해져 단위의 모든 숏에 적용된다.
+- 거부: `conform`을 하지 않았다. `qc_skip`에 모르는 이름이 있다.
 
 ### takes select
 
@@ -476,7 +477,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | 키 | 고치는 때 |
 | --- | --- |
 | `units[].prompt` | 언제나. 영어 프롬프트를 쓴다. 견적에 묶이지 않으므로 견적 뒤에 고쳐도 된다. 이미 내보낸 작업에는 내보낼 때의 프롬프트가 쓰인다 |
-| `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적는다. 넣기 전에 사용자에게 알린다 |
+| `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적고, 단위의 모든 숏에 적용된다. 배경을 교체한 숏의 `color`는 도구가 자동으로 빼므로 적지 않아도 된다. 그 밖에 이유를 댈 수 있는 경우에 쓰고, 넣기 전에 사용자에게 알린다 |
 | `units[].params.duration` | 모델이 정해진 길이만 받을 때. 단위 길이보다 짧지 않은 허용 값으로 고친다. 견적 전에 고치고, 견적 뒤에 고쳤으면 다시 견적을 기록한다 |
 
 작업 목록, `state`, `est_credits`, `inputs`, `selected_take`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
@@ -493,7 +494,10 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `color` | 프레임의 평균 색이 가까운 정도. 0에서 1 | `color_min` 0.6 이상 |
 | `flicker_ratio` | 테이크의 깜빡임을 원본의 깜빡임으로 나눈 값 | `flicker_ratio_max` 2.0 이하 |
 | `overlap_ratio` | 원본과 거의 같은 화면 영역의 비율. 0에서 1 | 판정에 쓰지 않는다 |
-| `verdict`, `failed` | 그 숏의 판정과 기준에 못 미친 항목 | |
+| `verdict`, `failed` | 그 숏의 판정과 기준에 못 미친 항목. `failed`에는 `skipped`의 이름이 들어가지 않는다 | |
+| `skipped` | 판정에서 뺀 점수 이름의 정렬된 목록. 배경을 교체한 숏의 `"color"`(자동)와 단위의 `qc_skip`(손으로)을 합친 것이다. 점수 자체는 그대로 계산해 적는다 | |
+
+보고서의 숏별 표에서는 판정에서 뺀 점수 뒤에 `(제외)`가 붙는다.
 
 ## 검수용 스틸
 

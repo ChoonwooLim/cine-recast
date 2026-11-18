@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cine_recast import plan
+from cine_recast import casting, plan
 from cine_recast.analyze import load_video
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import SCALE_FLAGS, iter_frames, probe, probe_size, run
@@ -161,7 +161,8 @@ def score_shot(ref_clip: Path, take_clip: Path, box: PictureBox, thresholds: dic
     """Scores and verdict of one shot.
 
     ref_clip holds the reference picture area only; take_clip is the conformed full-frame shot,
-    with the picture at `box`. Names in `skip` are left out of the verdict.
+    with the picture at `box`. Names in `skip` are scored as usual but left out of the verdict;
+    `skipped` lists them, sorted, and `failed` never holds one of them.
     """
     ref_clip, take_clip = Path(ref_clip), Path(take_clip)
     skip = _check_inputs(thresholds, skip)
@@ -169,7 +170,7 @@ def score_shot(ref_clip: Path, take_clip: Path, box: PictureBox, thresholds: dic
     result = {"frames_ref": frames_ref, "frames_take": frames_take, "timing_ok": frames_ref == frames_take,
               "camera": None, "motion": None, "color": None, "flicker_ratio": None, "overlap_ratio": None}
     if not result["timing_ok"]:
-        return {**result, "verdict": "retry", "failed": ["timing"]}
+        return {**result, "verdict": "retry", "failed": ["timing"], "skipped": sorted(set(skip))}
 
     with tempfile.TemporaryDirectory(prefix="cine-recast-qc-", ignore_cleanup_errors=True) as work:
         picture = Path(work) / "take.mp4"
@@ -193,20 +194,26 @@ def score_shot(ref_clip: Path, take_clip: Path, box: PictureBox, thresholds: dic
         ok = result[name] >= thresholds[key] if direction == "min" else result[name] <= thresholds[key]
         if not ok and name not in skip:
             failed.append(name)
-    return {**result, "verdict": "retry" if failed else "pass", "failed": failed}
+    return {**result, "verdict": "retry" if failed else "pass", "failed": failed, "skipped": sorted(set(skip))}
 
 
 def score_take(root: Path, unit_id: str, take_id: str) -> dict:
     """Score every shot of a conformed take, write takes/<unit>/<take>/scores.json and return it.
 
-    Thresholds come from project.json (DEFAULT_THRESHOLDS fill missing keys), skipped scores
-    from the unit's qc_skip. The take passes when every shot passes.
+    Thresholds come from project.json (DEFAULT_THRESHOLDS fill missing keys). Left out of a shot's
+    verdict: "color" when casting.json swaps a background element that appears in the shot (the swap
+    changes the colour by design), plus the unit's qc_skip, which applies to all its shots. The take
+    passes when every shot passes.
     """
     root = Path(root)
     pp = ProjectPaths(root)
     item = plan.unit(root, unit_id)
-    thresholds = {**DEFAULT_THRESHOLDS, **(load_project(root).get("thresholds") or {})}
-    skip = item.get("qc_skip") or []
+    own = load_project(root).get("thresholds") or {}
+    if not isinstance(own, dict):
+        raise CineRecastError("project.json: the key 'thresholds' must be an object")
+    thresholds = {**DEFAULT_THRESHOLDS, **own}
+    manual = set(item.get("qc_skip") or [])
+    background = casting.swapped_shots(root, "background")
     _, box = load_video(root)
     folder = pp.take_dir(unit_id, take_id)
     if not (folder / "conform.json").is_file():
@@ -216,7 +223,8 @@ def score_take(root: Path, unit_id: str, take_id: str) -> dict:
         clip = folder / "shots" / f"{index:04d}.mov"
         if not clip.is_file():
             raise CineRecastError(f"conformed shot clip missing: {clip}; run conform again")
-        shots[str(index)] = score_shot(pp.shot_dir(index) / "ref.mp4", clip, box, thresholds, skip)
+        skip = manual | ({"color"} if index in background else set())
+        shots[str(index)] = score_shot(pp.shot_dir(index) / "ref.mp4", clip, box, thresholds, sorted(skip))
     if not shots:
         raise CineRecastError(f"unit {unit_id} has no shots to score")
     data = {"verdict": "pass" if all(s["verdict"] == "pass" for s in shots.values()) else "retry",

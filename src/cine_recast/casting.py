@@ -210,6 +210,21 @@ def check(root: Path) -> list[str]:
     return problems
 
 
+def swapped_shots(root: Path, kind: str) -> set[int]:
+    """The shots of the elements of `kind` that have a swap in casting.json as it is now.
+
+    Read leniently: entries that are not well formed are passed over (cast check reports them).
+    """
+    data = load(root)
+    if not isinstance(data, dict) or not isinstance(data.get("elements"), list) or not isinstance(data.get("swaps"), list):
+        return set()
+    swapped = {swap.get("element") for swap in data["swaps"]
+               if isinstance(swap, dict) and isinstance(swap.get("element"), str)}
+    return {shot for element in data["elements"]
+            if isinstance(element, dict) and element.get("kind") == kind and element.get("id") in swapped
+            and _is_shot_list(element.get("shots")) for shot in element["shots"]}
+
+
 def swaps_for_shots(root: Path, shots: list[int]) -> list[dict]:
     """Swaps of the elements that appear in any of the shots, in element order."""
     data = load(root)
