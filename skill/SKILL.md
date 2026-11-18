@@ -41,7 +41,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 아래 열한 가지는 어떤 경우에도 지킨다. 각 규칙의 이유를 함께 적었으니, 여기 적히지 않은 경우에는 그 이유에 비추어 판단한다.
 
 1. **승인 기록 없이 유료 생성을 실행하지 않는다.** 영상, 이미지, 소리 생성 호출은 `approve`로 묶음의 승인 한도가 장부에 기록된 뒤에만 한다. `approve`는 사용자가 승인한 범위 안에서만 실행한다. 사용자가 프로젝트 예산을 승인했으면(`budget set`) 그 예산 안에서 묶음마다 견적 합계를 기록하고, 사용자가 비용을 묻지 말라고 했으면 견적 합계를 그 말을 적은 메모와 함께 기록한다("비용 승인"). `--by`에는 언제나 승인한 사용자를 적는다. 이유: 크레딧은 사용자의 돈이고, 장부(`ledger.jsonl`)는 사용자가 얼마까지 허락했는지를 보여 주는 유일한 기록이다. 그래서 에이전트는 예산을 스스로 정하거나 올리지 않고, `ledger.jsonl`을 직접 고치거나 지우지 않는다.
-2. **도구가 `jobs next`, `assets next`, `sound next`로 내보낸 작업만, 내보낸 그대로 실행한다.** 이유: 도구는 장부가 받아 준 작업만 내보내므로, 그 출력에 없는 유료 호출은 승인 밖의 지출이다. 시험 삼아 하는 생성이나 업스케일 같은 다른 유료 기능도 마찬가지다. 모델, 길이, 해상도, 장수, 입력 파일을 바꿔 보내는 것도 견적과 다른 금액이 나가므로 같은 위반이다.
+2. **도구가 `jobs next`, `assets next`, `sound next`, `extra next`로 내보낸 작업만, 내보낸 그대로 실행한다.** 이유: 도구는 장부가 받아 준 작업만 내보내므로, 그 출력에 없는 유료 호출은 승인 밖의 지출이다. 시험 삼아 하는 생성이나 업스케일 같은 다른 유료 기능도 마찬가지다. 모델, 길이, 해상도, 장수, 입력 파일을 바꿔 보내는 것도 견적과 다른 금액이 나가므로 같은 위반이다.
 3. **완성본에 원본의 프레임과 오디오를 넣지 않는다.** 테이크, 교체 자료, 소리로 등록하는 파일은 생성 작업이 돌려준 파일뿐이다. 이유: 완성본은 공개와 상업 이용이 목적이어서, 원본에서 복사한 화면이나 소리가 조금이라도 들어가면 쓸 수 없게 된다. 그래서 교체할 것이 없는 숏도 원본을 그대로 쓰지 않고 다시 생성하며, 참조 영상이나 그것을 가공한 파일을 `jobs done`과 `sound done`에 주지 않고, 원본의 소리를 `assemble --audio`에 주지 않으며, 원본이 들어 있는 `compare.mp4`와 `review.mp4`를 완성본으로 내놓지 않는다. 음악과 효과음은 이 영화를 위해 새로 생성하고, 원본의 소리는 어떤 생성의 입력으로도 쓰지 않는다. 스타일 참고용으로 올리는 것도 입력이다. 도구는 테이크와 자료 결과로 주는 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안의 파일(소리 결과는 `sounds/` 안의 파일까지), 참조 영상과 바이트가 같은 파일, `--audio`로 주는 `reference/`, `analysis/`, `takes/`, `out/` 안의 파일과 참조 영상과 바이트가 같은 파일을 거부하고, `sound mix`는 믹스가 원본의 소리와 닮았으면 거부하지만, 밖으로 옮기거나 가공한 사본까지 모두 알아보지는 못한다.
 4. **중국어를 쓰지 않는다.** 프롬프트, `casting.json`, 메모, 파일 이름, 사용자에게 주는 보고 어디에도 한자를 쓰지 않는다. 이유: 이 프로젝트의 고정 방침이고, 도구가 한자를 발견하면 검사를 실패시킨다. 영상 속 간판이나 자막에 한자가 보여도 옮겨 적지 않고 영어로 묘사한다.
 5. **프롬프트는 영어로 쓴다.** 생성 모델에 보내는 글(`plan.json`의 `prompt`, `assets add --prompt`, `sound add --prompt`)과 `casting.json`의 `look`은 영어다. 이유: 도구가 한글, 한자, 가나가 든 프롬프트를 거부한다. 사용자가 한국어로 준 묘사는 영어로 옮겨 쓰고, 옮긴 뜻을 한국어로 확인받는다. 모델에 보내지 않는 글인 메모(`--note`), 요소의 `name`, 소리의 `--label`은 한국어로 적어도 된다.
@@ -72,7 +72,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
    ```powershell
    & $cr budget set $p --limit 700 --by owner --note "whole project, approved in chat"
    ```
-3. 그 뒤로는 묶음마다 에이전트가 승인을 기록한다. 묶음은 한 번에 내보내는 작업들의 이름표이고 이름은 자유롭게 짓는다(`assets-1`, `draft-1`, `final-1`, `sound-1`). `jobs list`(자료는 `assets list`, 소리는 `sound list`)에서 작업마다 실제로 보낼 `params`를 읽고, 작업마다 Higgsfield에 가격을 물어 `jobs set-cost`(자료는 `assets set-cost`, 소리는 `sound set-cost`)로 기록한 뒤, 묶음의 견적 합계를 `approve`로 기록한다. `--by`는 예산을 승인한 사용자다. 가격을 묻는 호출은 아무것도 제출하지 않는 호출이어야 한다. 견적도 실제로 올린 입력 파일의 media id만 받으므로 입력 파일을 먼저 올리고, 올리기 전에 보낼 파일을 사용자에게 한 줄로 알린다. 방법은 generation-jobs.md에 있다.
+3. 그 뒤로는 묶음마다 에이전트가 승인을 기록한다. 묶음은 한 번에 내보내는 작업들의 이름표이고 이름은 자유롭게 짓는다(`assets-1`, `draft-1`, `final-1`, `sound-1`). `jobs list`(자료는 `assets list`, 소리는 `sound list`, 원본에 없는 숏은 `extra list`)에서 작업마다 실제로 보낼 `params`를 읽고, 작업마다 Higgsfield에 가격을 물어 `jobs set-cost`(자료는 `assets set-cost`, 소리는 `sound set-cost`, 원본에 없는 숏은 `extra set-cost`)로 기록한 뒤, 묶음의 견적 합계를 `approve`로 기록한다. `--by`는 예산을 승인한 사용자다. 가격을 묻는 호출은 아무것도 제출하지 않는 호출이어야 한다. 견적도 실제로 올린 입력 파일의 media id만 받으므로 입력 파일을 먼저 올리고, 올리기 전에 보낼 파일을 사용자에게 한 줄로 알린다. 방법은 generation-jobs.md에 있다.
 
    ```powershell
    & $cr jobs list $p
@@ -230,6 +230,20 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 `j0001: done, unit u01 take t001`처럼 테이크 id가 나온다. 테이크는 쌓이기만 하고 덮어쓰이지 않는다. 생성이 실패하면 `jobs fail`로 기록한다. 내보낸 작업은 반드시 둘 중 하나로 닫는다. 닫지 않은 작업은 견적만큼 한도를 차지하고, 계획을 바꾸는 것도 막는다.
+
+### 원본에 없는 숏
+
+사용자가 원본에 없는 숏(시작 숏, 두 숏을 이어 주는 숏, 끝 숏)을 원하면 `extra`로 만든다. 따로 생성한 클립은 기존 숏과 이어지지 않는다. 그래서 기존 숏으로 들어가거나 기존 숏에서 나오는 숏은 사용자가 확정한 테이크에서 시작한다.
+
+- 테이크를 늘린다(`--extend`). 그 숏 앞에 붙일 숏은 `backward`(새 클립이 테이크의 첫 프레임에서 끝난다), 뒤에 붙일 숏은 `forward`(테이크의 끝 프레임에서 시작한다)다. 모델이 참조 영상을 받아야 한다(`video_ref`).
+- 또는 테이크의 첫 프레임이나 끝 프레임을 새 클립의 끝(`--end`)이나 처음(`--start`)으로 준다. `U/T:FRAME`의 FRAME은 `first`, `last`, 또는 그 테이크 원본 파일의 프레임 번호다.
+
+```powershell
+& $cr extra add $p --label "roar" --prompt "The giant raises its head and roars at the camera, then lowers it, the same place, light and camera as the shot that follows." --model seedance_2_5 --seconds 4 --batch extra-1 --extend u01/t001 --direction backward --quality final
+& $cr extra add $p --label "bridge" --prompt "The rider turns the dragon toward the cliff, the same place and light as both shots." --model seedance_2_5 --seconds 5 --batch extra-1 --start u01/t001:last --end u02/t002:first --quality final
+```
+
+`extra add`는 id(`x0001`)를 낸다. 그다음은 영상 작업과 같다. 가격을 물어 `extra set-cost`로 기록하고, "비용 승인"대로 승인한 뒤 `extra next`로 내보내고, 생성해 `extra done`으로 등록한다(generation-jobs.md의 "원본에 없는 숏 작업 하나의 순서"). 결과(`extras/x0001/take.mp4`)는 다른 테이크처럼 사용자가 눈으로 보고 받아들일지 정한다. 원본에 없는 숏은 사용자가 따로 쓰는 컷이고, 원본을 숏마다 다시 만드는 `assemble`에는 들어가지 않는다.
 
 ### 6. 맞춤
 

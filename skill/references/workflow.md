@@ -10,7 +10,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 첫 위치 인자는 항상 프로젝트 폴더다.
 - 성공하면 종료 코드 0, 거부되거나 입력이 틀리면 2이고 이유가 `error:` 줄로 나온다. 1은 도구의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast` 한 줄). 환경 변수 `CINE_RECAST_DEBUG=1`을 두면 그 뒤에 추적 정보가 붙는다.
 - 프로젝트의 JSON 파일(`project.json`, `analysis/video.json`, `analysis/cuts.json`, `casting.json`, `models.json`, `plan.json`, `assets.json`, `sounds.json`, `out/soundtrack.json`)은 UTF-8로 읽고, 맨 앞의 BOM은 받아들인다. UTF-8이 아니거나 JSON이 깨졌으면 `error: casting.json is not valid JSON: ... at line 3, column 5`처럼 파일 이름(프로젝트 폴더 기준)과 줄과 칸이 나오고, 꼭 있어야 할 키가 없거나 맨 위가 객체가 아니면 파일 이름과 키가 나온다.
-- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `sound list`, `sound next`, `takes cuts`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
+- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `sound list`, `sound next`, `extra list`, `extra next`, `takes cuts`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
 - 예시의 id, 숫자, 경로는 예시다.
 
 ## 프로젝트 폴더 구조
@@ -38,6 +38,9 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   plans/plan-0001.json              plan build --replace가 보관한 이전 계획
   sounds.json                       sound add, set-cost, next, done, fail, set
   sounds/s0001.wav                  sound done (생성된 소리)
+  extras.json                       extra add, set-cost, next, done, fail
+  extras/x0001/start.png, end.png   extra add (--start, --end로 준 테이크 프레임)
+  extras/x0001/take.mp4             extra done (원본에 없는 숏의 결과)
   ledger.jsonl                      budget set, approve, jobs next, jobs done, jobs fail, assets next, assets done,
                                     assets fail, sound next, sound done, sound fail
   ledger.lock                       장부를 쓰는 명령이 쓰는 동안 잡는 잠금 파일(지우지 않아도 된다)
@@ -52,7 +55,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   out/report.md                     report
 ```
 
-`ledger.jsonl`, `ledger.lock`, `assets/`, `sounds/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
+`ledger.jsonl`, `ledger.lock`, `assets/`, `sounds/`, `extras/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
 
 ## 명령
 
@@ -539,18 +542,77 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 쓰는 것: `out/compare.mp4`. 왼쪽이 원본, 오른쪽이 완성본이고 원본에 소리가 있으면 그 소리가 들어간다. 검토용이다.
 - 거부: `out/final.mp4`가 없다.
 
-### extra
+### extra add
 
-원본에 없는 숏(시작 숏, 이어 주는 숏, 끝 숏)을 만드는 영상 작업이다. `assemble`에는 들어가지 않는다.
+원본에 없는 숏(시작 숏, 이어 주는 숏, 끝 숏) 하나를 영상 생성 작업으로 계획한다. 이 숏은 사용자가 따로 쓰는 컷이고 `assemble`에는 들어가지 않는다.
 
 ```powershell
 & $cr extra add $p --label "roar" --prompt "The giant roars at the camera before it attacks." --model seedance_2_5 --seconds 4 --batch extra-1 --extend u01/t001 --direction backward
+& $cr extra add $p --label "bridge" --prompt "The rider turns the dragon toward the cliff." --model seedance_2_5 --seconds 5 --batch extra-1 --start u01/t001:last --end u02/t002:first --ref assets/hero/a0001_2.png --quality final
+```
+
+- `--label`: 짧은 이름. 한국어도 되고 한자는 안 된다. `--prompt`: 영어(단위 프롬프트와 같은 규칙).
+- `--model`: `models.json`의 영상 모델. `--seconds`: 모델의 `min_seconds`에서 `max_seconds` 사이의 정수.
+- `--extend U/T`와 `--direction backward|forward`: 테이크 `takes/U/T/raw.*`를 늘린다. `backward`는 테이크의 첫 프레임 앞을, `forward`는 끝 프레임 뒤를 만든다. 테이크의 원본 파일이 역할 `video` 입력이 되고, 모델의 `video_ref`가 `true`여야 한다. `--direction`은 `--extend`와만 쓰고, `--extend`는 `--start`, `--end`와 함께 쓰지 않는다.
+- `--start U/T:FRAME`, `--end U/T:FRAME`: 새 클립의 첫 프레임과 끝 프레임. FRAME은 `first`, `last`, 또는 그 테이크 원본 파일의 프레임 번호(0부터)다. 도구가 그 프레임을 테이크의 크기 그대로 `extras/<id>/start.png`, `end.png`에 쓰고, 역할 `start_image`, `end_image` 입력으로 삼는다.
+- `--ref`: 참조 이미지(여러 번 쓸 수 있다, 역할 `image`). 프로젝트의 `assets/` 안의 생성 자료나 `swap/` 안의 이미지만 받는다.
+- 입력은 하나도 없어도 된다(프롬프트만으로 만드는 숏). 테이크는 현재 계획이나 보관된 계획의 단위에 있어야 하고, 이미지 입력 수(`start`, `end`, `--ref`)는 모델의 `image_refs` 이하여야 한다.
+- `--quality`: `draft`(기본)는 모델의 첫 해상도, `final`은 마지막 해상도. `--aspect-ratio`: 생략하면 화면 영역에 가장 가까운 비율.
+- 쓰는 것: `extras.json`, `--start`나 `--end`를 주면 `extras/<id>/start.png`, `end.png`. 출력: id(`x0001`). 한 번 쓴 id는 다시 쓰이지 않는다.
+- 거부: 테이크나 단위가 없다. 프레임 번호가 파일 밖이다. `--extend`와 `--start`나 `--end`를 함께 줬다. `--extend`에 `--direction`이 없거나 `--extend` 없이 `--direction`을 줬다. `--ref`가 `assets/`나 `swap/` 밖에 있다. 이미지 입력이 `image_refs`보다 많다. `--extend`인데 모델의 `video_ref`가 `false`다. 길이가 모델 범위 밖이다. 프롬프트가 영어가 아니다. 이름에 한자가 있다. `cast check`를 통과하지 못한다(테이크에는 교체한 인물이 나오므로 같은 권리 답이 필요하다). 거부되면 아무것도 쓰지 않는다.
+
+### extra list
+
+원본에 없는 숏의 작업과, 작업마다 보낼 `params`와 입력을 보여 준다.
+
+```powershell
 & $cr extra list $p
+```
+
+- 출력: JSON 목록. 항목마다 `id`, `label`, `kind`(`extend` 또는 `shot`), `batch`, `state`, `est_credits`, `params`(`model`, `prompt`, `duration`, `aspect_ratio`, `resolution`, 늘리기면 `direction`), `medias`(입력의 역할과 절대 경로), `source`, `result`.
+
+### extra set-cost
+
+견적을 기록한다. 견적은 `params`(프롬프트 제외)와 모든 입력 파일의 내용에 묶인다. 입력 파일이 바뀌면 다시 견적해야 나간다.
+
+```powershell
 & $cr extra set-cost $p --extra x0001 --credits 40
+```
+
+- 출력: `x0001: quoted 40.0 credits`. 거부: 이미 내보냈다. 크레딧이 0 이하다. `extra add`의 검사(권리 포함)를 통과하지 못한다.
+
+### extra next
+
+묶음에서 견적이 있는 작업을 장부에 올리고 실행할 내용을 낸다. 같은 묶음의 다른 작업과 한도를 함께 쓴다.
+
+```powershell
 & $cr extra next $p --batch extra-1
+```
+
+- 출력: JSON 목록. 항목마다 `{"job_id": "x0001", "kind": "extend", "tool": "generate_video", "params": {...}, "medias": [{"role": "video", "path": "<절대 경로>"}]}`.
+- 거부(종료 코드 2): 승인 기록이 없다. 한도를 넘는다. 견적 뒤에 `params`나 입력 파일이 바뀌었다. `cast check`나 `extra add`의 검사를 통과하지 못한다. 장부가 거부하기 전에 내보낸 작업의 목록은 그대로 출력된다.
+
+### extra done
+
+돌려받은 영상을 등록하고 작업을 끝난 것으로 기록한다.
+
+```powershell
 & $cr extra done $p --extra x0001 --provider-id 7c2f0e1a-5b1d-4c7e-9a43-0d6f2b8e1c55 --credits 38 --file "$p\downloads\x0001.mp4"
+```
+
+- 쓰는 것: `extras/<id>/take.<확장자>`(`.mp4`, `.mov`, `.mkv`, `.webm`), `extras.json`, `ledger.jsonl`. 장부에 `done`으로 기록된 작업의 파일은 바꾸지 않는다.
+- 출력: `x0001: done, result extras/x0001/take.mp4`.
+- 거부: 내보낸 상태가 아니다. 파일이 없거나 읽을 수 있는 영상이 아니다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/`, `sounds/`, `extras/` 안의 파일이다. 바이트가 참조 영상과 같다.
+
+### extra fail
+
+실패한 작업을 기록한다.
+
+```powershell
 & $cr extra fail $p --extra x0002 --reason "provider error: content rejected" --credits 0
 ```
+
+- 출력: `x0002: failed`. 다시 하려면 `extra add`로 새 작업을 만든다.
 
 ### sound add
 
@@ -666,7 +728,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 숏별 결과의 모델은 고른 테이크를 실제로 만든 작업이 보낸 모델이다(`plan unit`으로 단위의 모델을 바꾼 뒤에도 그 테이크의 모델이 나온다). 고른 테이크가 없거나 작업을 알 수 없으면 단위의 지금 모델이다.
-- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 단위별 사용자 확인, 소리, 비용, 열린 항목(고른 테이크가 없는 단위, 사용자가 확인하지 않은 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏, 내보냈지만 기록을 닫지 않은 소리, 사운드트랙 뒤에 바뀐 소리 배치). 원본과 거의 같은 숏의 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
+- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 단위별 사용자 확인, 원본에 없는 숏(이름, 종류, 출처, 모델, 해상도, 끝난 작업의 크레딧, 상태), 소리, 비용, 열린 항목(내보냈지만 기록을 닫지 않은 원본에 없는 숏, 고른 테이크가 없는 단위, 사용자가 확인하지 않은 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏, 내보냈지만 기록을 닫지 않은 소리, 사운드트랙 뒤에 바뀐 소리 배치). 원본과 거의 같은 숏의 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
 - 권리 확인: `yes`가 아닌 답에는 "확인 필요"가 붙는다. 다만 `likeness_consent`의 `not_applicable`은 도구가 확인할 수 있으면(교체하는 인물이 없거나, 인물 교체 이미지가 모두 참조 이미지 없이 생성한 파일) 붙지 않고 도구가 확인했다고 적힌다.
 - 단위별 사용자 확인: 단위마다 숏, 고른 테이크, 확정한 사용자와 시각(메모가 있으면 메모). 확정이 없거나 고른 테이크와 다른 테이크의 확정이면 "확인 안 함"이다.
 - 소리: 소리마다 id, 종류, 이름, 시작 프레임, 길이, 음량, 상태(꺼진 소리는 "음소거"). 사운드트랙이 있으면 음량, 최고 레벨, 원본 소리와의 상관, 컷마다 시작하는 소리. 사운드트랙의 배치가 지금의 `sounds.json`과 다르거나(믹스 뒤에 `sound set`을 했거나 소리가 더 끝났다) 파일이 믹스 기록과 다르면 열린 항목에 "sound mix를 다시 한다"가 적힌다.
@@ -766,6 +828,33 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `gain_db` | 믹스 음량, -60에서 12 |
 | `fade_in`, `fade_out` | 페이드 길이(초, 0 이상) |
 | `muted` | `true`면 믹스에서 뺀다 |
+
+### extras.json
+
+`extra` 명령들이 쓴다. 손으로 고치지 않는다.
+
+```json
+{
+  "extras": [
+    {"id": "x0001", "label": "roar", "kind": "extend", "batch": "extra-1", "state": "planned", "est_credits": null,
+     "params": {"model": "seedance_2_5", "prompt": "The giant roars at the camera before it attacks.", "duration": 4,
+                "aspect_ratio": "16:9", "resolution": "720p", "direction": "backward"},
+     "inputs": [{"role": "video", "path": "takes/u01/t001/raw.mp4"}],
+     "source": {"extend": "u01/t001", "direction": "backward"}, "result": null}
+  ]
+}
+```
+
+| 키 | 뜻 |
+| --- | --- |
+| `id` | `x`와 숫자. 다른 작업 id와 같은 장부를 쓴다 |
+| `label` | 짧은 이름 |
+| `kind` | `extend`(테이크를 늘린다) 또는 `shot`(프레임이나 참조 이미지나 프롬프트만으로 만든다) |
+| `batch`, `state`, `est_credits` | 묶음, 상태(장부가 정한다), 견적. 견적을 기록하면 `quote_digest`가, 내보내면 `sent_params`가 더해진다 |
+| `params` | 생성 호출에 보낼 값. `model`, `prompt`, `duration`(초), `aspect_ratio`, `resolution`, 늘리기면 `direction` |
+| `inputs` | `{"role", "path"}` 목록(프로젝트 폴더 기준 경로). 역할은 `video`, `start_image`, `end_image`, `image` |
+| `source` | `extra add`에 준 테이크와 프레임(`extend`, `direction`, `start`, `end`). 보고서에 쓰인다 |
+| `result` | `extra done`이 저장한 파일. 끝나기 전에는 `null` |
 
 ### analysis/audio.json
 

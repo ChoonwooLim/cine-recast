@@ -10,7 +10,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 지켜야 할 것은 세 가지다.
 
 - 가격을 묻는 호출은 아무것도 제출하지 않는 호출이어야 한다.
-- 생성 호출은 `jobs next`, `assets next`, `sound next`가 내보낸 작업에 대해서만, 내보낸 내용 그대로, 작업 하나에 한 번 한다.
+- 생성 호출은 `jobs next`, `assets next`, `sound next`, `extra next`가 내보낸 작업에 대해서만, 내보낸 내용 그대로, 작업 하나에 한 번 한다.
 - 호출의 결과는 성공이든 실패든 도구에 기록한다. 실제로 차감된 크레딧을 적는다.
 
 ## Higgsfield 도구
@@ -96,6 +96,7 @@ id와 값은 형식을 보여 주는 예시다. 실제 값은 `models_explore`�
 
 - **본 생성의 해상도**는 `resolutions`의 마지막 값이고, 완성본은 언제나 모델이 내는 가장 높은 품질로 만든다. 그래서 `resolutions`에는 모델이 제공하는 해상도를 4K까지 모두 적는다(4K보다 높은 값만 뺀다). 사용자가 더 낮은 마감 해상도를 바랄 때만 그보다 높은 값을 목록에서 뺀다. 모델에만 있는 품질 항목(화질 단계, 품질 모드 같은 것)은 본 생성에서 가장 좋은 값으로 두고 `notes`에 적는다. 초안이 낮은 해상도에서 괜찮아 보였어도 모든 단위의 본 생성은 이 수준으로 만든다. 견적을 받기 전에 정한다.
 - **초안의 해상도**는 `resolutions`의 첫 값이다. 초안은 비용을 아끼려는 것이 아니라 방법을 고르려는 것이므로, 교체한 얼굴과 중요한 부분을 판단할 수 있는 해상도여야 한다. 높이가 수십 픽셀인 얼굴은 같은 사람인지 판단할 수 없고, 모델도 그 얼굴을 지키지 못한다. 그래서 교체할 얼굴이 가장 크게 나오는 숏에서 그 얼굴의 높이가 약 60픽셀보다 작아지는 해상도는 초안이라도 `resolutions`에서 뺀다. 숏 하나에 초안 테이크를 여럿 만들어 가장 좋은 것을 골라도 된다(`jobs add`). 출력에서의 얼굴 높이는 원본 화면에서 잰 얼굴 높이에 출력 화면의 높이를 곱하고 원본 화면 영역의 높이로 나눠 어림한다. 화면 영역의 높이가 800픽셀이고 그 숏의 얼굴이 90픽셀이면 480p 출력에서는 54픽셀이므로 480p를 뺀다.
+- **원본에 없는 숏의 메모**: `extra`로 만드는 숏에 쓸 영상 모델에는 `notes`에 두 키를 더 적는다. `extend`는 테이크를 늘리는 호출에 넣을 값(모드, 방향을 받는 파라미터 이름, 역할 이름), `shot`은 첫 프레임과 끝 프레임과 참조 이미지로 만드는 호출에 넣을 값이다. 예: `"extend": {"mode": "video_extension", "direction_param": "extension_mode", "video": "video_references", "image": "image_references"}`, `"shot": {"mode": "omni_reference", "start": "start_image", "end": "end_image", "image": "image_references"}`. 값은 `models_explore`에서 그 모델의 정보를 읽어 적는다.
 - **모델에만 있는 항목**(`mode` 같은 것)과 입력 역할의 이름은 도구가 다루지 않는다. 위의 `notes`처럼 그 모델 항목에 메모로 적어 둔다. 도구는 모르는 키를 무시한다. 가격을 물을 때와 생성할 때, 그리고 다음 세션에서도 같은 값을 쓰기 위해서다.
 - **소리와 초안 스위치**: 영상 모델에 소리를 함께 만드는 옵션(이름이 `generate_audio` 같은 것)이 있으면 끈다. 완성본의 소리는 소리 모델로 따로 만들어 `sound mix`로 맞추고, `conform`은 화면만 남긴다. `draft`처럼 이름이 비슷한 공급자 쪽 스위치는 도구의 `--quality`와 별개이므로 기본값으로 둔다. 무엇을 골랐든 그 모델의 `notes`에 적고, 가격을 물을 때와 생성할 때 똑같이 넣는다.
 - **모델이 정해진 길이만 받으면**(예: 5초와 10초) `plan build` 뒤에 `plan.json`의 `units[].params.duration`을 단위 길이보다 짧지 않은 허용 값으로 고친다.
@@ -229,6 +230,31 @@ id와 값은 형식을 보여 주는 예시다. 실제 값은 `models_explore`�
    & $cr cast check $p
    ```
 
+## 원본에 없는 숏 작업 하나의 순서
+
+영상 작업과 같은 순서이고, 명령과 역할 이름만 다르다(SKILL.md의 "원본에 없는 숏").
+
+1. **입력 파일 올리기.** `cast check`가 통과하는지 보고, 보낼 파일을 사용자에게 한 줄로 알린 뒤 `extra list`의 `medias`(늘릴 테이크, 첫 프레임과 끝 프레임 이미지, 참조 이미지)를 올리고 media id를 받는다.
+2. **가격 묻기와 `extra set-cost`.** `extra list`의 `params`, 입력의 media id와 역할, 모델 `notes`의 `extend`나 `shot`에 적은 값으로 견적 도구(`estimate_video_cost`로 끝나는 도구)에 묻고 기록한다. 견적은 입력 파일의 내용에 묶이므로, 그 뒤에 파일이 바뀌면 다시 묻는다.
+
+   ```powershell
+   & $cr extra list $p
+   & $cr extra set-cost $p --extra x0001 --credits 40
+   ```
+3. **승인 기록과 `extra next`.** "비용 승인"대로 묶음을 승인 기록하고 내보낸다.
+
+   ```powershell
+   & $cr approve $p --batch extra-1 --limit 40 --by owner --note "opening shot, within the project budget"
+   & $cr extra next $p --batch extra-1
+   ```
+4. **생성 호출.** 항목마다 `generate_video`로 끝나는 도구를 한 번 부른다. `params`의 값을 그대로 넣고, 역할은 모델 `notes`에 적은 이름으로 바꾼다. `kind`가 `extend`면 `notes.extend`를 따른다. 역할 `video` 입력(늘릴 테이크)은 `video`에 적은 이름으로, `params.direction`은 `direction_param`에 적은 파라미터로 보낸다. `kind`가 `shot`이면 `notes.shot`을 따른다. 역할 `start_image`는 `start`, `end_image`는 `end`, `image`는 `image`에 적은 이름으로 보낸다. 모드는 `mode`의 값을 넣는다.
+5. **완료 대기와 내려받기.** `jobs_wait`로 기다리고 결과 영상을 내려받아 영상으로 읽히는지 확인한다.
+6. **`extra done`.** 받은 파일을 등록한다. 실패하면 `extra fail`로 닫는다. 결과는 `extras/x0001/take.mp4`이고, 사용자가 눈으로 보고 받아들일지 정한다.
+
+   ```powershell
+   & $cr extra done $p --extra x0001 --provider-id 7c2f0e1a-5b1d-4c7e-9a43-0d6f2b8e1c55 --credits 38 --file "$p\downloads\x0001.mp4"
+   ```
+
 ## 소리 작업 하나의 순서
 
 영상 작업과 같고, 명령과 도구만 다르다. 소리 작업에는 입력 파일이 없다. 원본의 소리는 스타일 참고용으로도 올리지 않는다(SKILL.md 규칙 3).
@@ -304,7 +330,7 @@ id와 값은 형식을 보여 주는 예시다. 실제 값은 `models_explore`�
 
 ## 끊긴 작업 이어가기
 
-세션을 이어받았을 때 `jobs list`, `assets list`, `sound list`에 `state`가 `issued`인 작업이 있으면, 내보냈지만 결과가 기록되지 않은 작업이다. 이전 세션이 제출했는지 알 수 없으므로 "결과를 모를 때"와 똑같이 먼저 조회한다.
+세션을 이어받았을 때 `jobs list`, `assets list`, `sound list`, `extra list`에 `state`가 `issued`인 작업이 있으면, 내보냈지만 결과가 기록되지 않은 작업이다. 이전 세션이 제출했는지 알 수 없으므로 "결과를 모를 때"와 똑같이 먼저 조회한다.
 
 - 제출돼 있었으면 끝나기를 기다려 `jobs done`이나 `jobs fail`로 기록한다.
 - 제출되지 않았으면 지금 제출한다. `jobs list`에 내보낼 때의 `params`가 그대로 나오고, 입력 파일은 `plan show`의 `units[].inputs`에 있다.
