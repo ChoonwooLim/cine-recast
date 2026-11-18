@@ -5,7 +5,7 @@ import pytest
 from conftest import EXAMPLE_MODEL, IMAGE_MODEL, generate_and_use, png, run_cli
 
 from cine_recast.assets import (add, generated_files, issue_next, list_assets, record_done, record_fail,
-                                set_cost, use)
+                                ref_free_files, set_cost, use)
 from cine_recast.casting import check
 from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
@@ -179,3 +179,11 @@ def test_a_unit_on_an_image_model_is_refused(planned3):
     assert any("video model" in p for p in check_plan(planned3.root))
     with pytest.raises(CineRecastError, match="video model"):
         set_job_cost(planned3.root, "j0001", 1.0)
+
+
+def test_clearing_refs_afterwards_does_not_make_a_virtual_person(assets3, tmp_path):
+    image = generate_and_use(assets3.root, "hero", tmp_path, refs=[png(tmp_path / "ref.png")])
+    assert generated_files(assets3.root, "hero") == [image] and ref_free_files(assets3.root, "hero") == []
+    data = read_json(assets3.assets_file); data["assets"][0]["refs"] = []; write_json(assets3.assets_file, data)
+    assert ref_free_files(assets3.root, "hero") == []                           # the quote binds what was sent
+    assert any("likeness_consent" in p for p in check(assets3.root))

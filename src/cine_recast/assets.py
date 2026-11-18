@@ -327,17 +327,25 @@ def record_fail(root: Path, asset_id: str, reason: str, credits: float = 0.0) ->
 
 # --- generated files and the swap table ----------------------------------------------------
 
-def generated_files(root: Path, element: str) -> list[str]:
-    """The stored files of the element's done assets, relative to the project folder, in asset order.
+def _sent_without_refs(asset: dict) -> bool:
+    """True when the asset lists no refs and was sent with none.
 
-    Only files that exist under the names record_done gives (assets/<element>/<id>_<n><suffix>) count.
+    The quote digest binds what was sent at issue (the sent params and the medias), so it must match
+    the sent params with no medias; editing refs in assets.json afterwards does not change that.
     """
+    sent = asset.get("sent_params")
+    return (asset.get("refs") == [] and isinstance(sent, dict)
+            and asset.get("quote_digest") == digest({"params": sent, "medias": []}))
+
+
+def _stored_files(root: Path, element: str, *, ref_free: bool) -> list[str]:
     root = Path(root)
     folder = ProjectPaths(root).asset_dir(element).relative_to(root).as_posix()
     suffixes = "|".join(re.escape(suffix) for suffix in IMAGE_SUFFIXES)
     found: list[str] = []
     done = [a for a in _load(root)["assets"]
-            if isinstance(a, dict) and a.get("element") == element and a.get("state") == "done"]
+            if isinstance(a, dict) and a.get("element") == element and a.get("state") == "done"
+            and (not ref_free or _sent_without_refs(a))]
     for asset in sorted(done, key=_number):
         aid = asset.get("id")
         if not isinstance(aid, str) or not _ASSET_ID.match(aid) or not isinstance(asset.get("files"), list):
@@ -345,6 +353,23 @@ def generated_files(root: Path, element: str) -> list[str]:
         name = re.compile(rf"{re.escape(folder)}/{re.escape(aid)}_[1-9][0-9]*({suffixes})")
         found += [f for f in asset["files"] if isinstance(f, str) and name.fullmatch(f) and (root / f).is_file()]
     return found
+
+
+def generated_files(root: Path, element: str) -> list[str]:
+    """The stored files of the element's done assets, relative to the project folder, in asset order.
+
+    Only files that exist under the names record_done gives (assets/<element>/<id>_<n><suffix>) count.
+    """
+    return _stored_files(root, element, ref_free=False)
+
+
+def ref_free_files(root: Path, element: str) -> list[str]:
+    """The element's generated files that came from assets made without reference images.
+
+    Only these can show a virtual person: an outside photo used as a ref can carry a real person's
+    likeness into the result.
+    """
+    return _stored_files(root, element, ref_free=True)
 
 
 def use(root: Path, element: str, image: str) -> None:

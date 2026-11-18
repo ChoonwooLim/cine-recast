@@ -261,14 +261,15 @@ def assets3(_assets3_template, tmp_path):
     return _copy_project(_assets3_template, tmp_path)
 
 
-def generate_and_use(root: Path, element: str, tmp_path: Path) -> str:
-    """Run one asset of `element` through add, set-cost, approve, issue and done, put its image in
-    the swap table with assets.use, and return that image's project-relative path."""
+def generate_and_use(root: Path, element: str, tmp_path: Path, refs: list[Path] = ()) -> str:
+    """Run one asset of `element` (with reference images `refs`) through add, set-cost, approve,
+    issue and done, put its image in the swap table with assets.use, and return that image's
+    project-relative path."""
     from cine_recast import assets, ledger
 
     batch = f"gen-{element}"
     asset = assets.add(root, element=element, prompt="A generated stand-in in neutral studio light.",
-                       model="image_model_x", batch=batch)
+                       model="image_model_x", batch=batch, refs=list(refs))
     assets.set_cost(root, asset["id"], 1.0)
     ledger.approve(root, batch, 1.0, "owner")
     assets.issue_next(root, batch)

@@ -81,3 +81,13 @@ def test_not_applicable_consent_needs_every_person_image_generated(assets3, tmp_
     assert any("likeness_consent" in p for p in check(assets3.root))
     set_right(assets3.root, "likeness_consent", "yes")
     assert check(assets3.root) == []
+
+
+def test_a_person_generated_from_reference_images_needs_likeness_consent(assets3, tmp_path):
+    ref = png(tmp_path / "ref.png")
+    generate_and_use(assets3.root, "sky_battle", tmp_path, refs=[ref])  # refs stay fine for a background
+    assert check(assets3.root) == []
+    generate_and_use(assets3.root, "hero", tmp_path, refs=[ref])
+    assert any("likeness_consent" in p and "reference images" in p for p in check(assets3.root))
+    set_right(assets3.root, "likeness_consent", "yes")
+    assert check(assets3.root) == []

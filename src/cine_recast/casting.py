@@ -57,25 +57,37 @@ def _answer(rights: dict, item: str) -> str | None:
     return entry.get("answer") if isinstance(entry, dict) else None
 
 
-def _not_generated(root: Path, images: list[tuple[str, object]]) -> list[tuple[str, object]]:
-    """The (element, image) pairs whose image is not one of the element's generated files."""
-    from cine_recast.assets import generated_files  # assets imports this module
+def _virtual_person_problem(root: Path, images: list[tuple[str, object]]) -> str | None:
+    """Why likeness_consent "not_applicable" does not hold for these (element, image) pairs of person
+    swaps, or None when every image is a generated file of its element made without reference images."""
+    from cine_recast.assets import generated_files, ref_free_files  # assets imports this module
 
-    generated: dict[str, set[Path]] = {}
-    outside = []
+    known: dict[str, tuple[set[Path], set[Path]]] = {}
     for element, image in images:
-        if element not in generated:
-            generated[element] = {(root / name).resolve() for name in generated_files(root, element)}
-        if not isinstance(image, str) or (root / image).resolve() not in generated[element]:
-            outside.append((element, image))
-    return outside
+        if element not in known:
+            known[element] = ({(root / name).resolve() for name in generated_files(root, element)},
+                              {(root / name).resolve() for name in ref_free_files(root, element)})
+        generated, ref_free = known[element]
+        path = (root / image).resolve() if isinstance(image, str) else None
+        if path in ref_free:
+            continue
+        if path in generated:
+            return (f"A person is replaced with an image generated from reference images (swap for {element!r}: "
+                    f"{image!r}); a person generated from reference images needs likeness_consent 'yes', "
+                    "record it with: rights set --item likeness_consent --answer yes")
+        return (f"A person is replaced with an image this project did not generate (swap for {element!r}: "
+                f"{image!r}), so likeness_consent 'not_applicable' does not hold (it covers only a person "
+                "generated without reference images); record consent with: "
+                "rights set --item likeness_consent --answer yes")
+    return None
 
 
 def check(root: Path) -> list[str]:
     """Problems found in casting.json as English sentences. An empty list means it is valid.
 
     A person swap needs likeness_consent "yes", or "not_applicable" when every image of every
-    person swap is a file this project generated for that element (a virtual person).
+    person swap is a file this project generated for that element from an asset without reference
+    images (a virtual person).
     """
     root = Path(root)
     data = load(root)
@@ -153,12 +165,9 @@ def check(root: Path) -> list[str]:
 
     consent = _answer(rights, "likeness_consent")
     if "person" in swapped_kinds and consent == "not_applicable":
-        outside = _not_generated(root, person_images)
-        if outside:
-            element, image = outside[0]
-            problems.append(f"A person is replaced with an image this project did not generate (swap for "
-                            f"{element!r}: {image!r}), so likeness_consent 'not_applicable' does not hold; "
-                            "record consent with: rights set --item likeness_consent --answer yes")
+        problem = _virtual_person_problem(root, person_images)
+        if problem:
+            problems.append(problem)
     elif "person" in swapped_kinds and consent != "yes":
         problems.append("A person is replaced but likeness_consent is not answered 'yes'; "
                         "record it with: rights set --item likeness_consent --answer yes")
