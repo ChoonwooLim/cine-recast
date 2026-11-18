@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from fractions import Fraction
@@ -77,6 +78,16 @@ def probe(path: Path) -> VideoInfo:
     )
 
 
+def probe_size(path: Path) -> tuple[int, int]:
+    """(width, height) from stream metadata only; no frame is decoded."""
+    path = Path(path)
+    data = _ffprobe(path, ["-select_streams", "v:0", "-show_entries", "stream=width,height"])
+    streams = data.get("streams") or []
+    if not streams:
+        raise CineRecastError(f"no video stream in {path}")
+    return int(streams[0]["width"]), int(streams[0]["height"])
+
+
 def run(args: list[str]) -> None:
     """Run ffmpeg with the given arguments. Raises CineRecastError with the stderr tail on failure."""
     try:
@@ -88,6 +99,13 @@ def run(args: list[str]) -> None:
         raise CineRecastError("ffmpeg was not found on PATH") from exc
     if proc.returncode != 0:
         raise CineRecastError(f"ffmpeg failed: {_tail(proc.stderr)}")
+
+
+SCALE_FLAGS = "flags=bicubic+accurate_rnd+full_chroma_int"   # keeps mid-grey at 128 when scaling
+
+
+def _scale_filter(size: tuple[int, int]) -> str:
+    return f"scale={size[0]}:{size[1]}:{SCALE_FLAGS}"
 
 
 def _crop_filter(crop: Crop) -> str:
@@ -113,37 +131,43 @@ def iter_frames(path: Path, *, size: tuple[int, int] | None = None, crop: Crop |
     if crop is not None:
         filters.append(_crop_filter(crop))
     if size is not None:
-        filters.append(f"scale={size[0]}:{size[1]}")
+        filters.append(_scale_filter(size))
     if size is not None:
         out_w, out_h = size
     elif crop is not None:
         out_w, out_h = crop[2], crop[3]
     else:
-        info = probe(path)
-        out_w, out_h = info.width, info.height
+        out_w, out_h = probe_size(path)
     pix = "gray" if gray else "rgb24"
     channels = 1 if gray else 3
     frame_bytes = out_w * out_h * channels
     cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-i", str(path),
            "-vf", ",".join(filters), "-fps_mode", "passthrough",
            "-f", "rawvideo", "-pix_fmt", pix, "pipe:1"]
-    try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except FileNotFoundError as exc:
-        raise CineRecastError("ffmpeg was not found on PATH") from exc
-    assert proc.stdout is not None
-    try:
-        while True:
-            buf = proc.stdout.read(frame_bytes)
-            if len(buf) < frame_bytes:
-                break
-            arr = np.frombuffer(buf, dtype=np.uint8)
-            yield arr.reshape((out_h, out_w) if gray else (out_h, out_w, 3)).copy()
-    finally:
-        proc.stdout.close()
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait()
+    with tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        except FileNotFoundError as exc:
+            raise CineRecastError("ffmpeg was not found on PATH") from exc
+        assert proc.stdout is not None
+        finished = False
+        try:
+            while True:
+                buf = proc.stdout.read(frame_bytes)
+                if len(buf) < frame_bytes:
+                    finished = True
+                    break
+                arr = np.frombuffer(buf, dtype=np.uint8)
+                yield arr.reshape((out_h, out_w) if gray else (out_h, out_w, 3)).copy()
+        finally:
+            proc.stdout.close()
+            if not finished and proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        if finished and proc.returncode != 0:
+            err.seek(0)
+            text = err.read().decode("utf-8", errors="replace")
+            raise CineRecastError(f"ffmpeg failed while decoding {path}: {_tail(text)}")
 
 
 def extract_still(path: Path, frame: int, out: Path, *, crop: Crop | None = None) -> None:
@@ -176,8 +200,8 @@ def cut_frames(path: Path, start: int, end: int, out: Path, *, crop: Crop | None
         args += ["-c:v", "libx264", "-crf", "14", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
     else:
         args += ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"]
-    info = probe(path)
-    if audio and info.has_audio:
+    info = probe(path) if audio else None
+    if info is not None and info.has_audio:
         t0 = Fraction(start * info.fps_den, info.fps_num)
         t1 = Fraction(end * info.fps_den, info.fps_num)
         args += ["-af", f"atrim=start={float(t0):.6f}:end={float(t1):.6f},asetpts=PTS-STARTPTS",

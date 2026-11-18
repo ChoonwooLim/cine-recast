@@ -86,7 +86,8 @@ def make_motion_clip(path: Path, kind: str, *, frames: int = 24, rate: float = 4
     elif kind == "zoom":
         graph = (f"testsrc2=size={w}x{h}:rate=24,trim=end_frame=1,loop=loop={frames - 1}:size=1,"
                  f"setpts=N/(24*TB),scale=w='trunc(iw*pow({rate},n)/2)*2':h='trunc(ih*pow({rate},n)/2)*2':eval=frame,"
-                 f"crop=w={w}:h={h}:x='(iw-{w})/2':y='(ih-{h})/2',format=yuv420p")
+                 f"crop=w={w}:h={h}:x='(trunc({w}*pow({rate},n)/2)*2-{w})/2':"
+                 f"y='(trunc({h}*pow({rate},n)/2)*2-{h})/2',format=yuv420p")
     else:
         raise ValueError(f"unknown motion kind: {kind}")
     _run(["-f", "lavfi", "-i", graph, "-frames:v", str(frames), *_encode_args(path)])

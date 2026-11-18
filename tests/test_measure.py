@@ -23,6 +23,7 @@ def test_pan_direction_and_speed(tmp_path):
 def test_zoom_rate(tmp_path):
     s = camera_series(make_motion_clip(tmp_path / "z.mp4", "zoom", rate=1.01))
     assert abs(np.median(s[:, 2]) - math.log(1.01)) < 0.003
+    assert abs(np.median(s[:, 0])) < 0.6 and abs(np.median(s[:, 1])) < 0.6   # a centred zoom is not a pan
 
 
 def test_motion_maps_shape_and_energy(tmp_path):
@@ -48,3 +49,16 @@ def test_sheet_gets_measures(project3):
     sheet = read_json(project3.sheet_file(1))
     assert len(sheet["camera"]["series"]) == 29 and len(sheet["color"]["lab_mean"]) == 3
     assert isinstance(sheet["flicker"], float)
+
+
+def test_non_finite_fit_becomes_zero_row(tmp_path, monkeypatch):
+    clip = make_motion_clip(tmp_path / "p.mp4", "pan")
+    import cine_recast.measure as m
+    real = m.cv2.estimateAffinePartial2D
+
+    def fake(a, b, **kw):
+        _, inliers = real(a, b, **kw)
+        return np.full((2, 3), np.nan), inliers
+    monkeypatch.setattr(m.cv2, "estimateAffinePartial2D", fake)
+    s = camera_series(clip)
+    assert np.isfinite(s).all() and not s.any()

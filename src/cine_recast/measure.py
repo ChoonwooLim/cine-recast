@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import iter_frames, probe
+from cine_recast.ffmpeg import iter_frames, probe_size
 
 ANALYSIS_WIDTH = 480        # camera and colour are measured at this width, aspect ratio kept
 MAX_CORNERS = 400           # features tracked per frame pair
@@ -33,8 +33,8 @@ DECIMALS = 3                # stored values are rounded to this many decimals
 
 
 def _analysis_size(path: Path) -> tuple[int, int]:
-    info = probe(path)
-    height = max(2, round(ANALYSIS_WIDTH * info.height / info.width / 2) * 2)
+    width, height_in = probe_size(path)
+    height = max(2, round(ANALYSIS_WIDTH * height_in / width / 2) * 2)
     return ANALYSIS_WIDTH, height
 
 
@@ -51,6 +51,8 @@ def _pair_motion(prev: np.ndarray, cur: np.ndarray) -> tuple[float, float, float
     m, inliers = cv2.estimateAffinePartial2D(pts[ok], nxt[ok], method=cv2.RANSAC)
     if m is None or inliers is None or int(inliers.sum()) < MIN_INLIERS:
         return 0.0, 0.0, 0.0
+    if not np.isfinite(m).all():
+        return 0.0, 0.0, 0.0
     scale = math.hypot(m[0, 0], m[1, 0])
     if scale <= 0.0:
         return 0.0, 0.0, 0.0
@@ -58,7 +60,10 @@ def _pair_motion(prev: np.ndarray, cur: np.ndarray) -> tuple[float, float, float
     cx, cy = (w - 1) / 2, (h - 1) / 2
     dx = m[0, 0] * cx + m[0, 1] * cy + m[0, 2] - cx
     dy = m[1, 0] * cx + m[1, 1] * cy + m[1, 2] - cy
-    return float(dx), float(dy), math.log(scale)
+    ds = math.log(scale)
+    if not (math.isfinite(dx) and math.isfinite(dy) and math.isfinite(ds)):
+        return 0.0, 0.0, 0.0
+    return float(dx), float(dy), ds
 
 
 def _frame_lab(rgb: np.ndarray) -> np.ndarray:

@@ -3,7 +3,7 @@ import pytest
 from conftest import make_clip
 
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import cut_frames, iter_frames, probe, run
+from cine_recast.ffmpeg import cut_frames, iter_frames, probe, probe_size, run
 
 
 def test_probe_counts_frames(clip3):
@@ -51,3 +51,30 @@ def test_korean_path_with_space(tmp_path):
 def test_run_failure_raises(tmp_path):
     with pytest.raises(CineRecastError):
         run(["-i", str(tmp_path / "missing.mp4"), str(tmp_path / "o.mp4")])
+
+
+def test_iter_frames_raises_on_a_broken_file(tmp_path):
+    bad = tmp_path / "broken.mp4"
+    bad.write_bytes(b"this is not a video file")
+    with pytest.raises(CineRecastError):
+        list(iter_frames(bad, size=(64, 36), gray=True))
+
+
+def test_iter_frames_can_be_closed_early(clip3):
+    frames = iter_frames(clip3, gray=True)
+    first = next(frames)
+    frames.close()                      # must not raise
+    assert first.shape == (216, 384)
+
+
+def test_scaling_keeps_mid_grey(tmp_path):
+    p = make_clip(tmp_path / "g.mp4", [("color=c=#808080", 4)])
+    unscaled = next(iter_frames(p))
+    rgb = next(iter_frames(p, size=(96, 54)))
+    assert abs(int(rgb.mean()) - 128) <= 1
+    assert abs(float(rgb.mean()) - float(unscaled.mean())) <= 1
+
+
+def test_probe_size_matches_probe(clip3):
+    info = probe(clip3)
+    assert probe_size(clip3) == (info.width, info.height)
