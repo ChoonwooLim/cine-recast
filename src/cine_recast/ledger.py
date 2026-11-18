@@ -4,12 +4,13 @@ State is recomputed from the append-only ledger.jsonl on every call. No cache fi
 and existing lines are never rewritten.
 """
 
+import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
 
 from cine_recast.errors import CineRecastError
-from cine_recast.jsonio import append_jsonl, read_jsonl
+from cine_recast.jsonio import append_jsonl
 from cine_recast.paths import ProjectPaths
 
 _DECIMALS = 6  # credit sums are rounded so float noise (0.1 + 0.2) never decides a refusal
@@ -23,8 +24,79 @@ def _r(value: float) -> float:
     return round(float(value), _DECIMALS)
 
 
+def _reject_constant(name: str):
+    raise ValueError(f"non-standard JSON constant {name}")
+
+
+def _is_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_amount(value, *, positive: bool) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    return value > 0 if positive else value >= 0
+
+
+# type -> list of (key, check) pairs; every key is required
+_SCHEMA = {
+    "approval": [("batch", _is_text), ("limit_credits", lambda v: _is_amount(v, positive=True)),
+                 ("by", _is_text)],
+    "job_issued": [("job_id", _is_text), ("batch", _is_text),
+                   ("est_credits", lambda v: _is_amount(v, positive=True))],
+    "job_done": [("job_id", _is_text), ("provider_id", _is_text),
+                 ("credits", lambda v: _is_amount(v, positive=False))],
+    "job_failed": [("job_id", _is_text), ("reason", _is_text),
+                   ("credits", lambda v: _is_amount(v, positive=False))],
+}
+
+
+def _invalid_reason(ev) -> str | None:
+    if not isinstance(ev, dict):
+        return "not a JSON object"
+    schema = _SCHEMA.get(ev.get("type")) if isinstance(ev.get("type"), str) else None
+    if schema is None:
+        return f"unknown event type {ev.get('type')!r}"
+    if not isinstance(ev.get("time"), str):
+        return "missing or invalid key 'time'"
+    for key, check in schema:
+        if key not in ev:
+            return f"missing key {key!r}"
+        if not check(ev[key]):
+            return f"invalid value for {key!r}: {ev[key]!r}"
+    return None
+
+
+def _load(root: Path) -> tuple[list[dict], list[str]]:
+    """Read ledger.jsonl strictly. Returns (valid events, one problem string per invalid line)."""
+    path = ProjectPaths(Path(root)).ledger_file
+    if not path.exists():
+        return [], []
+    events: list[dict] = []
+    problems: list[str] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            ev = json.loads(line, parse_constant=_reject_constant)
+        except ValueError as exc:
+            problems.append(f"ledger line {number} is invalid: unreadable JSON ({exc})")
+            continue
+        reason = _invalid_reason(ev)
+        if reason:
+            problems.append(f"ledger line {number} is invalid: {reason}")
+        else:
+            events.append(ev)
+    return events, problems
+
+
 def _events(root: Path) -> list[dict]:
-    return read_jsonl(ProjectPaths(Path(root)).ledger_file)
+    """Valid events, or CineRecastError if any line is damaged (fail closed)."""
+    events, problems = _load(root)
+    if problems:
+        extra = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
+        raise CineRecastError(f"{problems[0]}{extra}; the ledger is damaged, repair ledger.jsonl before continuing")
+    return events
 
 
 def _write(root: Path, record: dict) -> dict:
@@ -88,7 +160,7 @@ def issue(root: Path, job_id: str, batch: str, est_credits: float) -> dict:
     if job_id in jobs:
         raise CineRecastError(f"job already issued: {job_id}")
     status = _status(limits, jobs, batch)
-    if _r(status["committed"] + est_credits) > status["limit"]:
+    if not (_r(status["committed"] + est_credits) <= status["limit"]):
         raise CineRecastError(
             f"batch {batch!r} would exceed its approved limit: committed {status['committed']} "
             f"+ estimate {_r(est_credits)} > limit {status['limit']}")
@@ -129,9 +201,8 @@ def batch_status(root: Path, batch: str) -> dict:
 
 
 def audit(root: Path) -> dict:
-    events = _events(root)
+    events, problems = _load(root)
     limits, jobs = _state(events)
-    problems: list[str] = []
     seen_issued: set[str] = set()
     finished: set[str] = set()
     provider_ids: list[str] = []
@@ -156,6 +227,6 @@ def audit(root: Path) -> dict:
                     provider_ids.append(pid)
     batches = {b: _status(limits, jobs, b) for b in sorted(set(limits) | {j["batch"] for j in jobs.values()})}
     for name, st in batches.items():
-        if st["committed"] > st["limit"]:
+        if not (st["committed"] <= st["limit"]):
             problems.append(f"batch {name!r} is over its approved limit: committed {st['committed']} > limit {st['limit']}")
     return {"ok": not problems, "problems": problems, "batches": batches, "provider_ids": provider_ids}

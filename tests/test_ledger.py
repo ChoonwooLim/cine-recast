@@ -94,5 +94,53 @@ def test_audit_flags_overspent_batch_and_unissued_failure(tmp_path):
     append_jsonl(led, {"type": "job_done", "time": "x", "job_id": "j1", "provider_id": "p", "credits": 25.0})
     append_jsonl(led, {"type": "job_failed", "time": "x", "job_id": "j9", "reason": "r", "credits": 0.0})
     problems = audit(tmp_path)["problems"]
-    assert any("limit" in p and "b" in p for p in problems)
+    assert any("batch 'b' is over its approved limit" in p for p in problems)
     assert any("j9" in p for p in problems)
+
+
+def test_overspent_job_shows_negative_remaining_and_blocks_issue(tmp_path):
+    approve(tmp_path, "b", 100.0, "owner")
+    issue(tmp_path, "j1", "b", 10.0)
+    done(tmp_path, "j1", "p", 150.0)
+    assert batch_status(tmp_path, "b") == {"limit": 100.0, "committed": 150.0, "remaining": -50.0}
+    with pytest.raises(CineRecastError, match="limit"):
+        issue(tmp_path, "j2", "b", 1.0)
+    report = audit(tmp_path)
+    assert report["ok"] is False
+    assert any("batch 'b' is over its approved limit" in p for p in report["problems"])
+
+
+def _raw(root, text):
+    path = ProjectPaths(root).ledger_file
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+_BAD_LINES = {
+    "nan_credits": '{"type": "job_done", "time": "x", "job_id": "j1", "provider_id": "p", "credits": NaN}\n',
+    "infinite_limit": '{"type": "approval", "time": "x", "batch": "b", "limit_credits": Infinity, "by": "o", "note": ""}\n',
+    "negative_credits": '{"type": "job_done", "time": "x", "job_id": "j1", "provider_id": "p", "credits": -500.0}\n',
+    "misspelled_type": '{"type": "job_isued", "time": "x", "job_id": "j2", "batch": "b", "est_credits": 90.0}\n',
+    "missing_key": '{"type": "job_issued", "time": "x", "job_id": "j2", "batch": "b"}\n',
+    "string_amount": '{"type": "job_issued", "time": "x", "job_id": "j2", "batch": "b", "est_credits": "5"}\n',
+    "bool_amount": '{"type": "job_failed", "time": "x", "job_id": "j1", "reason": "r", "credits": true}\n',
+    "empty_id": '{"type": "job_issued", "time": "x", "job_id": "", "batch": "b", "est_credits": 5.0}\n',
+    "not_an_object": '[1, 2]\n',
+    "partial_last_line": '{"type": "job_issued", "time": "x", "job_id": "j2", "ba',
+}
+
+
+@pytest.mark.parametrize("bad", list(_BAD_LINES))
+def test_damaged_ledger_fails_closed(tmp_path, bad):
+    approve(tmp_path, "b", 100.0, "owner")
+    issue(tmp_path, "j1", "b", 10.0)
+    _raw(tmp_path, _BAD_LINES[bad])
+    for call in (lambda: issue(tmp_path, "j9", "b", 1.0),
+                 lambda: done(tmp_path, "j1", "p", 1.0),
+                 lambda: fail(tmp_path, "j1", "r"),
+                 lambda: batch_status(tmp_path, "b")):
+        with pytest.raises(CineRecastError, match="line 3"):
+            call()
+    report = audit(tmp_path)
+    assert report["ok"] is False
+    assert any("line 3" in p for p in report["problems"])
