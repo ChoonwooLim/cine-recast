@@ -179,3 +179,87 @@ def good_casting(root: Path, tmp_path: Path) -> None:
     })
     for item in RIGHTS_ITEMS:
         set_right(root, item, "yes")
+
+
+def _copy_project(template: Path, tmp_path: Path):
+    """An isolated copy of a session-built project folder."""
+    import shutil
+
+    from cine_recast.paths import ProjectPaths
+
+    root = Path(tmp_path) / "p"
+    shutil.copytree(template, root)
+    return ProjectPaths(root)
+
+
+EXAMPLE_MODEL = {
+    "id": "seedance_2_5", "kind": "video", "min_seconds": 4, "max_seconds": 15,
+    "aspect_ratios": ["21:9", "16:9"], "resolutions": ["480p", "720p", "1080p", "4k"],
+    "modes": ["video_edit", "omni_reference"], "video_ref": True, "image_refs": 4,
+    "read_at": "2026-11-18",
+}
+
+
+def write_models(root: Path, **overrides) -> None:
+    """Write models.json holding the example model, with `overrides` replacing its fields."""
+    from cine_recast.jsonio import write_json
+    from cine_recast.paths import ProjectPaths
+
+    write_json(ProjectPaths(Path(root)).models_file, {"models": [{**EXAMPLE_MODEL, **overrides}]})
+
+
+def set_prompt(root: Path, unit_id: str, text: str) -> None:
+    """Set the prompt of one unit in plan.json, as an agent editing the file would."""
+    from cine_recast.jsonio import read_json, write_json
+    from cine_recast.paths import ProjectPaths
+
+    path = ProjectPaths(Path(root)).plan_file
+    data = read_json(path)
+    matches = [u for u in data["units"] if u["id"] == unit_id]
+    if not matches:
+        raise KeyError(unit_id)
+    matches[0]["prompt"] = text
+    write_json(path, data)
+
+
+GOOD_PROMPT = "Replace the rider with the person in image 1 and the sky with image 2."
+
+
+@pytest.fixture(scope="session")
+def _cast3_template(tmp_path_factory, _analyzed3_template) -> Path:
+    """The analysed three-shot project with a valid casting.json, built once per session."""
+    import shutil
+
+    base = tmp_path_factory.mktemp("cast3")
+    root = base / "p"
+    shutil.copytree(_analyzed3_template, root)
+    good_casting(root, base)  # the swap images live in base/refs, outside the project
+    return root
+
+
+@pytest.fixture
+def cast3(_cast3_template, tmp_path):
+    """An isolated copy of the cast three-shot project (analyzed3 + good_casting)."""
+    return _copy_project(_cast3_template, tmp_path)
+
+
+@pytest.fixture(scope="session")
+def _planned3_template(tmp_path_factory, _cast3_template) -> Path:
+    """cast3 + the example model + an edit plan for batch "b" with English prompts, built once."""
+    import shutil
+
+    from cine_recast.plan import build
+
+    root = tmp_path_factory.mktemp("planned3") / "p"
+    shutil.copytree(_cast3_template, root)
+    write_models(root)
+    plan = build(root, model="seedance_2_5", method="edit", batch="b")
+    for unit in plan["units"]:
+        set_prompt(root, unit["id"], GOOD_PROMPT)
+    return root
+
+
+@pytest.fixture
+def planned3(_planned3_template, tmp_path):
+    """An isolated copy of the planned project: one unit u01 (shots 1-3), one job j0001."""
+    return _copy_project(_planned3_template, tmp_path)

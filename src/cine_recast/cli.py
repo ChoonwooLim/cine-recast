@@ -1,13 +1,14 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, ledger, plan, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
 from .errors import CineRecastError
-from .project import RIGHT_ANSWERS, RIGHTS_ITEMS, init_project, set_right
+from .project import RIGHT_ANSWERS, RIGHTS_ITEMS, init_project, load_project, set_right
 
 
 def _parse_cuts(text: str) -> list[int]:
@@ -57,6 +58,97 @@ def _cmd_cast_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_json(data) -> None:
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _report_problems(problems: list[str], ok_text: str) -> int:
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        return 2
+    print(ok_text)
+    return 0
+
+
+def _cmd_models_check(args: argparse.Namespace) -> int:
+    return _report_problems(plan.check_models(Path(args.project)), "models ok")
+
+
+def _cmd_plan_build(args: argparse.Namespace) -> int:
+    data = plan.build(Path(args.project), model=args.model, method=args.method, batch=args.batch,
+                      quality=args.quality, max_unit_seconds=args.max_unit_seconds, replace=args.replace)
+    for unit in data["units"]:
+        print(f"{unit['id']}: shots {unit['shots']}  frames {unit['start']}-{unit['end']}  "
+              f"duration {unit['params']['duration']} s")
+    print(f"planned jobs: {', '.join(job['id'] for job in data['jobs'])} (batch {args.batch})")
+    return 0
+
+
+def _cmd_plan_check(args: argparse.Namespace) -> int:
+    return _report_problems(plan.check(Path(args.project)), "plan ok")
+
+
+def _cmd_plan_show(args: argparse.Namespace) -> int:
+    _print_json(plan.load(Path(args.project)))
+    return 0
+
+
+def _cmd_jobs_list(args: argparse.Namespace) -> int:
+    _print_json(plan.load(Path(args.project))["jobs"])
+    return 0
+
+
+def _cmd_jobs_add(args: argparse.Namespace) -> int:
+    print(plan.add_job(Path(args.project), args.unit, args.batch, args.quality)["id"])
+    return 0
+
+
+def _cmd_jobs_set_cost(args: argparse.Namespace) -> int:
+    job = plan.set_cost(Path(args.project), args.job, args.credits)
+    print(f"{job['id']}: quoted {job['est_credits']} credits")
+    return 0
+
+
+def _cmd_jobs_next(args: argparse.Namespace) -> int:
+    _print_json(plan.issue_next(Path(args.project), args.batch))
+    return 0
+
+
+def _cmd_jobs_done(args: argparse.Namespace) -> int:
+    result = plan.record_done(Path(args.project), args.job, args.provider_id, args.credits, Path(args.file))
+    print(f"{args.job}: done, unit {result['unit']} take {result['take']}")
+    return 0
+
+
+def _cmd_jobs_fail(args: argparse.Namespace) -> int:
+    plan.record_fail(Path(args.project), args.job, args.reason, args.credits)
+    print(f"{args.job}: failed")
+    return 0
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    root = Path(args.project)
+    load_project(root)  # never start a ledger outside a project folder
+    record = ledger.approve(root, args.batch, args.limit, args.by, args.note)
+    print(f"approved batch {record['batch']}: limit {record['limit_credits']} credits (by {record['by']})")
+    return 0
+
+
+def _cmd_audit(args: argparse.Namespace) -> int:
+    root = Path(args.project)
+    load_project(root)  # a mistyped folder must not read as a clean audit
+    report = ledger.audit(root)
+    _print_json(report)
+    return 0 if report["ok"] else 2
+
+
+def _cmd_takes_select(args: argparse.Namespace) -> int:
+    takes.select(Path(args.project), args.unit, args.take)
+    print(f"{args.unit}: selected take {args.take}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cine-recast")
     parser.add_argument("--version", action="version", version=f"cine-recast {__version__}")
@@ -96,6 +188,86 @@ def _build_parser() -> argparse.ArgumentParser:
     cast_check = cast_sub.add_parser("check", help="validate casting.json")
     cast_check.add_argument("project", help="project folder")
     cast_check.set_defaults(func=_cmd_cast_check)
+
+    models = sub.add_parser("models", help="model list (models.json)")
+    models_sub = models.add_subparsers(dest="models_command")
+    models_check = models_sub.add_parser("check", help="validate models.json")
+    models_check.add_argument("project", help="project folder")
+    models_check.set_defaults(func=_cmd_models_check)
+
+    plan_p = sub.add_parser("plan", help="generation units")
+    plan_sub = plan_p.add_subparsers(dest="plan_command")
+    plan_build = plan_sub.add_parser("build", help="pack shots into units and plan one job per unit")
+    plan_build.add_argument("project", help="project folder")
+    plan_build.add_argument("--model", required=True, help="model id from models.json")
+    plan_build.add_argument("--method", required=True, choices=plan.METHODS)
+    plan_build.add_argument("--batch", required=True, help="approval batch of the planned jobs")
+    plan_build.add_argument("--quality", choices=plan.QUALITIES, default="draft")
+    plan_build.add_argument("--max-unit-seconds", type=float, default=None,
+                            help="unit length cap below the model's max_seconds")
+    plan_build.add_argument("--replace", action="store_true",
+                            help="rebuild an existing plan (only while no job has been issued)")
+    plan_build.set_defaults(func=_cmd_plan_build)
+    plan_check = plan_sub.add_parser("check", help="check prompts, input files and model limits")
+    plan_check.add_argument("project", help="project folder")
+    plan_check.set_defaults(func=_cmd_plan_check)
+    plan_show = plan_sub.add_parser("show", help="print plan.json")
+    plan_show.add_argument("project", help="project folder")
+    plan_show.set_defaults(func=_cmd_plan_show)
+
+    jobs = sub.add_parser("jobs", help="generation jobs")
+    jobs_sub = jobs.add_subparsers(dest="jobs_command")
+    jobs_list = jobs_sub.add_parser("list", help="print the jobs as JSON")
+    jobs_list.add_argument("project", help="project folder")
+    jobs_list.set_defaults(func=_cmd_jobs_list)
+    jobs_add = jobs_sub.add_parser("add", help="add a planned job for a unit")
+    jobs_add.add_argument("project", help="project folder")
+    jobs_add.add_argument("--unit", required=True)
+    jobs_add.add_argument("--batch", required=True)
+    jobs_add.add_argument("--quality", required=True, choices=plan.QUALITIES)
+    jobs_add.set_defaults(func=_cmd_jobs_add)
+    jobs_cost = jobs_sub.add_parser("set-cost", help="record a job's quoted cost")
+    jobs_cost.add_argument("project", help="project folder")
+    jobs_cost.add_argument("--job", required=True)
+    jobs_cost.add_argument("--credits", required=True, type=float)
+    jobs_cost.set_defaults(func=_cmd_jobs_set_cost)
+    jobs_next = jobs_sub.add_parser("next", help="issue the batch's quoted jobs through the ledger")
+    jobs_next.add_argument("project", help="project folder")
+    jobs_next.add_argument("--batch", required=True)
+    jobs_next.set_defaults(func=_cmd_jobs_next)
+    jobs_done = jobs_sub.add_parser("done", help="record a finished job and store its file as a take")
+    jobs_done.add_argument("project", help="project folder")
+    jobs_done.add_argument("--job", required=True)
+    jobs_done.add_argument("--provider-id", required=True)
+    jobs_done.add_argument("--credits", required=True, type=float)
+    jobs_done.add_argument("--file", required=True)
+    jobs_done.set_defaults(func=_cmd_jobs_done)
+    jobs_fail = jobs_sub.add_parser("fail", help="record a failed job")
+    jobs_fail.add_argument("project", help="project folder")
+    jobs_fail.add_argument("--job", required=True)
+    jobs_fail.add_argument("--reason", required=True)
+    jobs_fail.add_argument("--credits", type=float, default=0.0)
+    jobs_fail.set_defaults(func=_cmd_jobs_fail)
+
+    approve = sub.add_parser("approve", help="record a credit approval for a batch")
+    approve.add_argument("project", help="project folder")
+    approve.add_argument("--batch", required=True)
+    approve.add_argument("--limit", required=True, type=float, help="approved credits for the batch")
+    approve.add_argument("--by", required=True, help="who approved")
+    approve.add_argument("--note", default="")
+    approve.set_defaults(func=_cmd_approve)
+
+    audit = sub.add_parser("audit", help="check the ledger; exit 2 when it is not ok")
+    audit.add_argument("project", help="project folder")
+    audit.set_defaults(func=_cmd_audit)
+
+    takes_p = sub.add_parser("takes", help="takes of a unit")
+    takes_sub = takes_p.add_subparsers(dest="takes_command")
+    takes_select = takes_sub.add_parser("select", help="select a unit's take")
+    takes_select.add_argument("project", help="project folder")
+    takes_select.add_argument("--unit", required=True)
+    takes_select.add_argument("--take", required=True)
+    takes_select.set_defaults(func=_cmd_takes_select)
     return parser
 
 
