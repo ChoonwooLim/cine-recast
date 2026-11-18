@@ -5,12 +5,41 @@ $home_dir = Join-Path $HOME ".cine-recast"
 $venv = Join-Path $home_dir "venv"
 $bin = Join-Path $home_dir "bin"
 $launcher = Join-Path $bin "cine-recast.ps1"
+$skillSource = Join-Path $PSScriptRoot "skill"
+# The global skill folders of Claude Code and Codex.
+$skillTargets = @(
+    (Join-Path $HOME ".claude\skills\cine-recast"),
+    (Join-Path $HOME ".codex\skills\cine-recast")
+)
+
+function Test-OwnSkill {
+    # True when the folder holds a SKILL.md that names the cine-recast skill.
+    param([string]$Folder)
+    $file = Join-Path $Folder "SKILL.md"
+    if (-not (Test-Path $file -PathType Leaf)) { return $false }
+    return [bool](Select-String -Path $file -Pattern '^name:\s*cine-recast\s*$' -Quiet)
+}
 
 if ($Uninstall) {
     if (Test-Path $venv) { Remove-Item -Recurse -Force $venv }
     if (Test-Path $launcher) { Remove-Item -Force $launcher }
+    foreach ($target in $skillTargets) {
+        if (-not (Test-Path $target)) { continue }
+        if (Test-OwnSkill $target) { Remove-Item -Recurse -Force $target }
+        else { Write-Output "left in place (not the cine-recast skill): $target" }
+    }
     Write-Output "uninstalled cine-recast"
     return
+}
+
+# Refuse before anything is installed: a folder that is not this skill is never replaced.
+if (-not (Test-Path (Join-Path $skillSource "SKILL.md") -PathType Leaf)) {
+    throw "skill source not found: $skillSource"
+}
+foreach ($target in $skillTargets) {
+    if ((Test-Path $target) -and -not (Test-OwnSkill $target)) {
+        throw "$target exists and is not the cine-recast skill (no SKILL.md with 'name: cine-recast' in it); move it away and run again."
+    }
 }
 
 function Test-Python312 {
@@ -60,5 +89,12 @@ exit $code
 '@
 Set-Content -Path $launcher -Value $launcherText -Encoding utf8
 
+# Register the skill: each target becomes a fresh copy of skill/.
+foreach ($target in $skillTargets) {
+    if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+    New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
+    Copy-Item -Recurse -Path $skillSource -Destination $target
+}
+
 $version = & $venvPython -c "from importlib.metadata import version; print(version('cine-recast'))"
-Write-Output "installed cine-recast $version"
+Write-Output "installed cine-recast $version (skill registered)"

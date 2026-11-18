@@ -384,18 +384,18 @@ def planned_project(root: Path, clip: Path):
     return pp
 
 
-def fake_take(root: Path, unit_id: str, tmp_path: Path, *, size: tuple[int, int] = (640, 360),
-              fps: str | None = None, extra_frames: int = 12, filters: str = "") -> str:
-    """Register a stand-in take for a unit, made from the unit's reference clip, and return its id.
+def fake_raw(root: Path, unit_id: str, tmp_path: Path, *, size: tuple[int, int] = (640, 360),
+             fps: str | None = None, extra_frames: int = 12, filters: str = "") -> Path:
+    """Write a stand-in for the clip a generation job returns for a unit, made from the unit's
+    reference clip, and return its path (under tmp_path, outside the project).
 
     The clip is scaled to `size`, converted to frame rate `fps` when given (None keeps the
     reference rate), passed through `filters` (an ffmpeg filter chain) when given, and then gets
     its last frame repeated `extra_frames` times, or loses that many frames from its end when
-    extra_frames is negative. extra_frames counts in the take's own frame rate.
+    extra_frames is negative. extra_frames counts in the clip's own frame rate.
     """
     from cine_recast.ffmpeg import probe
     from cine_recast.paths import ProjectPaths
-    from cine_recast.takes import new_take
 
     source = ProjectPaths(Path(root)).unit_dir(unit_id) / "ref.mp4"
     folder = Path(tmp_path) / "fake_takes"
@@ -419,7 +419,14 @@ def fake_take(root: Path, unit_id: str, tmp_path: Path, *, size: tuple[int, int]
         if keep <= 0:
             raise ValueError(f"extra_frames={extra_frames} leaves no frames")
         _run(["-i", str(whole), "-vf", f"trim=end_frame={keep},setpts=PTS-STARTPTS", "-an", *_encode_args(out)])
-    return new_take(root, unit_id, out, {"job": "fake"})
+    return out
+
+
+def fake_take(root: Path, unit_id: str, tmp_path: Path, **options) -> str:
+    """Register a stand-in take for a unit (the clip of fake_raw, same options) and return its id."""
+    from cine_recast.takes import new_take
+
+    return new_take(root, unit_id, fake_raw(root, unit_id, tmp_path, **options), {"job": "fake"})
 
 
 @pytest.fixture(scope="session")
