@@ -70,8 +70,8 @@ def make_motion_clip(path: Path, kind: str, *, frames: int = 24, rate: float = 4
                      size: tuple[int, int] = (384, 216)) -> Path:
     """A clip whose content is one fixed textured image, moved per frame.
 
-    kind: "static", "pan" (content moves right by `rate` pixels per frame) or
-    "zoom" (content magnified by `rate` times per frame).
+    kind: "static", "pan" (content moves right by `rate` pixels per frame, left when `rate` is
+    negative) or "zoom" (content magnified by `rate` times per frame).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,9 +80,11 @@ def make_motion_clip(path: Path, kind: str, *, frames: int = 24, rate: float = 4
         graph = (f"testsrc2=size={w}x{h}:rate=24,trim=end_frame=1,loop=loop={frames - 1}:size=1,"
                  "setpts=N/(24*TB),format=yuv420p")
     elif kind == "pan":
-        pad = int(rate * frames) + 2
+        step = abs(rate)
+        pad = int(step * frames) + 2
+        x = f"{pad - 2}-n*{step}" if rate >= 0 else f"2+n*{step}"   # the window moves against the content
         graph = (f"testsrc2=size={w + pad}x{h}:rate=24,trim=end_frame=1,loop=loop={frames - 1}:size=1,"
-                 f"setpts=N/(24*TB),crop=w={w}:h={h}:x='{pad}-2-n*{rate}':y=0,format=yuv420p")
+                 f"setpts=N/(24*TB),crop=w={w}:h={h}:x='{x}':y=0,format=yuv420p")
     elif kind == "zoom":
         graph = (f"testsrc2=size={w}x{h}:rate=24,trim=end_frame=1,loop=loop={frames - 1}:size=1,"
                  f"setpts=N/(24*TB),scale=w='trunc(iw*pow({rate},n)/2)*2':h='trunc(ih*pow({rate},n)/2)*2':eval=frame,"
@@ -264,6 +266,29 @@ def _planned3_template(tmp_path_factory, _cast3_template) -> Path:
 def planned3(_planned3_template, tmp_path):
     """An isolated copy of the planned project: one unit u01 (shots 1-3), one job j0001."""
     return _copy_project(_planned3_template, tmp_path)
+
+
+@pytest.fixture(scope="session")
+def _conformed3_template(tmp_path_factory, _planned3_template) -> Path:
+    """planned3 with one fake take of u01 (fake_take defaults), conformed, built once per session."""
+    import shutil
+
+    from cine_recast.conform import conform
+
+    base = tmp_path_factory.mktemp("conformed3")
+    root = base / "p"
+    shutil.copytree(_planned3_template, root)
+    take_id = fake_take(root, "u01", base)  # the source clip lives in base/fake_takes, outside the project
+    conform(root, "u01", take_id)
+    return root
+
+
+@pytest.fixture
+def conformed3(_conformed3_template, tmp_path):
+    """An isolated copy of the conformed project: unit u01 with one conformed take, its id on `take_id`."""
+    pp = _copy_project(_conformed3_template, tmp_path)
+    pp.take_id = "t001"
+    return pp
 
 
 def planned_project(root: Path, clip: Path):

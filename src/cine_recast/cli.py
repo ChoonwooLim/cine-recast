@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, conform, ledger, plan, takes
+from . import __version__, conform, ledger, plan, qc, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -163,6 +163,11 @@ def _cmd_conform(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_qc(args: argparse.Namespace) -> int:
+    _print_json(qc.score_take(Path(args.project), args.unit, args.take))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cine-recast")
     parser.add_argument("--version", action="version", version=f"cine-recast {__version__}")
@@ -292,6 +297,12 @@ def _build_parser() -> argparse.ArgumentParser:
     conform_p.add_argument("--allow-retime", action="store_true",
                            help="resample a take that is too short evenly to the unit's frame count")
     conform_p.set_defaults(func=_cmd_conform)
+
+    qc_p = sub.add_parser("qc", help="score a conformed take against the reference; write scores.json")
+    qc_p.add_argument("project", help="project folder")
+    qc_p.add_argument("--unit", required=True)
+    qc_p.add_argument("--take", required=True)
+    qc_p.set_defaults(func=_cmd_qc)
     return parser
 
 
