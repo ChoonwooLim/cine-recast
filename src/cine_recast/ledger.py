@@ -68,14 +68,22 @@ def _invalid_reason(ev) -> str | None:
 
 
 def _load(root: Path) -> tuple[list[dict], list[str]]:
-    """Read ledger.jsonl strictly. Returns (valid events, one problem string per invalid line)."""
+    """Read ledger.jsonl strictly. Returns (valid events, one problem string per invalid line).
+
+    The file is read as bytes and each line decoded on its own, so a line that is not UTF-8 is one
+    more invalid line and the others are still read.
+    """
     path = ProjectPaths(Path(root)).ledger_file
     if not path.exists():
         return [], []
     events: list[dict] = []
     problems: list[str] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
-        line = line.removesuffix("\r")
+    for number, raw in enumerate(path.read_bytes().split(b"\n"), start=1):
+        try:
+            line = raw.removesuffix(b"\r").decode("utf-8")
+        except UnicodeDecodeError as exc:
+            problems.append(f"ledger line {number} is invalid: not UTF-8 text (byte {exc.start} cannot be read)")
+            continue
         if not line.strip():
             continue
         try:
@@ -146,9 +154,11 @@ def _status(limits: dict[str, float], jobs: dict[str, dict], batch: str) -> dict
 
 
 def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "") -> dict:
+    """Record a credit approval for a batch. Refused while the ledger does not validate."""
     _check_text("batch", batch)
     _check_amount("limit_credits", limit_credits, positive=True)
     _check_text("by", by)
+    _events(root)  # a damaged ledger is repaired before anything is appended to it
     return _write(root, {"type": "approval", "time": _now(), "batch": batch,
                          "limit_credits": float(limit_credits), "by": by, "note": note})
 

@@ -36,6 +36,29 @@ def test_review_strips(project3):
     assert names == ["cut_0030.png", "cut_0054.png", "shot_0001.png", "shot_0002.png", "shot_0003.png"]
 
 
+@pytest.mark.parametrize("file, text, fragment", [
+    ("video", "{}", "analysis/video.json is missing the key"),
+    ("video", '{"x": ', "analysis/video.json is not valid JSON"),
+    ("cuts", '{"cuts": "30,54"}', "analysis/cuts.json"),
+    ("cuts", '{"cuts": [30, "54"]}', "analysis/cuts.json"),
+])
+def test_a_damaged_analysis_file_is_named(analyzed3, capsys, file, text, fragment):
+    path = analyzed3.video_file if file == "video" else analyzed3.cuts_file
+    path.write_text(text, encoding="utf-8")
+    for command in (["cuts", "review", str(analyzed3.root)], ["cast", "template", str(analyzed3.root)]):
+        capsys.readouterr()
+        assert main(command) == 2
+        assert fragment in capsys.readouterr().err
+
+
+def test_a_damaged_picture_box_is_named(analyzed3):
+    data = read_json(analyzed3.video_file)
+    del data["picture_box"]["w"]
+    write_json(analyzed3.video_file, data)
+    with pytest.raises(CineRecastError, match="picture_box"):
+        review_strips(analyzed3.root)
+
+
 def test_cli_flow(tmp_path, clip3):
     root = tmp_path / "p"
     assert main(["init", str(root), "--reference", str(clip3), "--name", "t"]) == 0

@@ -285,6 +285,20 @@ def test_done_refuses_project_material(assets3, make, capsys):
     assert job_states(root)["a0001"] == "issued" and not assets3.asset_dir("hero").exists()
 
 
+def test_an_element_id_ending_in_a_newline_is_not_an_element(assets3):
+    c = read_json(assets3.casting_file); c["elements"][0]["id"] = "hero\n"; write_json(assets3.casting_file, c)
+    with pytest.raises(CineRecastError, match="element"):
+        add(assets3.root, element="hero\n", prompt=PROMPT, model="image_model_x", batch="assets-1")
+
+
+@pytest.mark.parametrize("text, fragment", [("{", "line 1, column 2"), ('{"assets": {}}', "'assets'")])
+def test_a_damaged_assets_file_is_named(assets3, text, fragment):
+    assets3.assets_file.write_text(text, encoding="utf-8")
+    with pytest.raises(CineRecastError, match=fragment) as refused:
+        list_assets(assets3.root)
+    assert refused.value.message.startswith("assets.json")
+
+
 def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):
     root = assets3.root
     first = generate_and_use(root, "hero", tmp_path)                            # a0001 done

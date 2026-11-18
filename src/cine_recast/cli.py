@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from . import __version__, assemble, assets, conform, ledger, plan, qc, report, takes
@@ -450,6 +452,13 @@ def main(argv: list[str] | None = None) -> int:
     except CineRecastError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return 2
+    except Exception as exc:  # last resort: one line instead of a traceback, and an exit code of its own
+        message = " ".join(str(exc).split())
+        print(f"error: unexpected failure ({type(exc).__name__}: {message}); this is a defect in cine-recast",
+              file=sys.stderr)
+        if os.environ.get("CINE_RECAST_DEBUG") == "1":
+            traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

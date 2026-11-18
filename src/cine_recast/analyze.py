@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from cine_recast.cuts import Shot, detect_cuts, shots_from_cuts
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import VideoInfo, cut_frames, extract_still, iter_frames, probe
-from cine_recast.jsonio import read_json, write_json
+from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.measure import measure_clip
 from cine_recast.paths import ProjectPaths
 from cine_recast.picture import PictureBox, detect_picture_box
@@ -22,27 +22,40 @@ def _reference(root: Path) -> Path:
     return Path(root) / load_project(root)["reference"]
 
 
+_VIDEO_KEYS = {"width": int, "height": int, "fps_num": int, "fps_den": int, "frames": int,
+               "duration": (int, float), "has_audio": bool, "pix_fmt": str, "picture_box": dict}
+
+
 def load_video(root: Path) -> tuple[VideoInfo, PictureBox]:
     pp = ProjectPaths(Path(root))
     if not pp.video_file.is_file():
         raise CineRecastError("analysis has not been run (analysis/video.json missing)")
-    data = read_json(pp.video_file)
+    data = read_project_json(pp.root, pp.video_file, _VIDEO_KEYS)
+    for key in ("x", "y", "w", "h"):
+        value = data["picture_box"].get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise CineRecastError(f"analysis/video.json: the key 'picture_box.{key}' must be a whole number")
     box = PictureBox.from_dict(data["picture_box"])
     info = VideoInfo(
-        width=int(data["width"]), height=int(data["height"]),
-        fps_num=int(data["fps_num"]), fps_den=int(data["fps_den"]),
-        frames=int(data["frames"]), duration=float(data["duration"]),
-        has_audio=bool(data["has_audio"]), pix_fmt=str(data["pix_fmt"]),
+        width=data["width"], height=data["height"], fps_num=data["fps_num"], fps_den=data["fps_den"],
+        frames=data["frames"], duration=float(data["duration"]), has_audio=data["has_audio"], pix_fmt=data["pix_fmt"],
     )
     return info, box
 
 
-def load_shots(root: Path) -> list[Shot]:
+def _load_cuts(root: Path) -> list[int]:
     pp = ProjectPaths(Path(root))
-    info, _ = load_video(root)
     if not pp.cuts_file.is_file():
         raise CineRecastError("analysis has not been run (analysis/cuts.json missing)")
-    return shots_from_cuts(list(read_json(pp.cuts_file)["cuts"]), info.frames)
+    cuts = read_project_json(pp.root, pp.cuts_file, {"cuts": list})["cuts"]
+    if not all(isinstance(cut, int) and not isinstance(cut, bool) for cut in cuts):
+        raise CineRecastError("analysis/cuts.json: the key 'cuts' must be a list of whole frame numbers")
+    return cuts
+
+
+def load_shots(root: Path) -> list[Shot]:
+    info, _ = load_video(root)
+    return shots_from_cuts(_load_cuts(root), info.frames)
 
 
 def analyze(root: Path, *, cuts: list[int] | None = None) -> dict:
@@ -132,7 +145,7 @@ def review_strips(root: Path) -> list[Path]:
     pp = ProjectPaths(root)
     info, box = load_video(root)
     shots = load_shots(root)
-    cut_list = list(read_json(pp.cuts_file)["cuts"])
+    cut_list = _load_cuts(root)
     ref = _reference(root)
     size = (CELL_WIDTH, max(2, round(CELL_WIDTH * box.h / box.w / 2) * 2))
     written: list[Path] = []

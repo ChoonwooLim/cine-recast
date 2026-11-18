@@ -27,7 +27,7 @@ from cine_recast import casting, ledger
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import cut_frames
-from cine_recast.jsonio import read_json, write_json
+from cine_recast.jsonio import read_json, read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch plan.IssueRefused)
 from cine_recast.lifecycle import (SENT, UNISSUED, fail, finish, highest, is_number, is_text, issue_in_order, now,
                                    quote, reconcile, require_issued, require_result, resolve, stale_quote)
@@ -39,6 +39,7 @@ METHODS = ("edit", "regen")
 QUALITIES = ("draft", "final")
 MODEL_KINDS = ("video", "image")
 ROLES = ("video", "image")
+QC_SCORES = ("camera", "motion", "color", "flicker_ratio")    # the judged scores of qc, the names qc_skip takes
 TOOL = "generate_video"
 _UNIT_ID = re.compile(r"^u(\d+)$")
 _JOB_ID = re.compile(r"^j(\d+)$")
@@ -57,13 +58,13 @@ def _whole(value: float) -> float:
 # --- models.json -------------------------------------------------------------------------
 
 def _read_models(root: Path) -> tuple[list, list[str]]:
-    path = ProjectPaths(Path(root)).models_file
-    if not path.is_file():
-        return [], [f"models.json not found: {path}; write it from the provider's model list"]
+    pp = ProjectPaths(Path(root))
+    if not pp.models_file.is_file():
+        return [], [f"models.json not found: {pp.models_file}; write it from the provider's model list"]
     try:
-        data = read_json(path)
-    except ValueError as exc:
-        return [], [f"models.json is not valid JSON: {exc}"]
+        data = read_project_json(pp.root, pp.models_file)
+    except CineRecastError as exc:
+        return [], [exc.message]
     models = data.get("models") if isinstance(data, dict) else None
     if not isinstance(models, list) or not models:
         return [], ["models.json must hold a non-empty list 'models'."]
@@ -166,12 +167,7 @@ def load(root: Path) -> dict:
     pp = ProjectPaths(Path(root))
     if not pp.plan_file.is_file():
         raise CineRecastError(f"plan.json not found: {pp.plan_file}; run plan build first")
-    try:
-        data = read_json(pp.plan_file)
-    except ValueError as exc:
-        raise CineRecastError(f"plan.json is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict) or not isinstance(data.get("units"), list) or not isinstance(data.get("jobs"), list):
-        raise CineRecastError("plan.json must hold the lists 'units' and 'jobs'")
+    data = read_project_json(pp.root, pp.plan_file, {"units": list, "jobs": list})
     reconcile(root, data["jobs"])
     return data
 
@@ -180,11 +176,38 @@ def _save(root: Path, data: dict) -> None:
     write_json(ProjectPaths(Path(root)).plan_file, data)
 
 
+def _unit_problems(item: dict, label: str) -> list[str]:
+    """The id, shots and qc_skip of a unit, which name folders, cut frames and score the take."""
+    problems = []
+    if not isinstance(item.get("id"), str) or not _UNIT_ID.fullmatch(item["id"]):
+        problems.append(f"{label}: id must be 'u' followed by digits, not {item.get('id')!r}.")
+    shots = item.get("shots")
+    if (not isinstance(shots, list) or not shots
+            or not all(isinstance(s, int) and not isinstance(s, bool) for s in shots)):
+        problems.append(f"{label}: shots must be a non-empty list of shot numbers, not {shots!r}.")
+    skip = item.get("qc_skip", [])
+    if not isinstance(skip, list) or not all(isinstance(name, str) and name in QC_SCORES for name in skip):
+        problems.append(f"{label}: qc_skip must be a list of names among {', '.join(QC_SCORES)}, not {skip!r}.")
+    return problems
+
+
 def _find_unit(data: dict, unit_id: str) -> dict:
+    """The unit with this id. An id that is not 'u' followed by digits is refused: unit ids name
+    folders under analysis/units/ and takes/."""
+    if not isinstance(unit_id, str) or not _UNIT_ID.fullmatch(unit_id):
+        raise CineRecastError(f"not a valid unit id: {unit_id!r}; unit ids are 'u' followed by digits "
+                              "(run plan check)")
     for item in data["units"]:
         if isinstance(item, dict) and item.get("id") == unit_id:
             return item
     raise CineRecastError(f"unknown unit: {unit_id}")
+
+
+def _checked(item: dict, label: str) -> dict:
+    problems = _unit_problems(item, label)
+    if problems:
+        raise CineRecastError("plan.json: " + "; ".join(problems) + "; repair it, plan check lists the problems")
+    return item
 
 
 def _find_job(data: dict, job_id: str) -> dict:
@@ -206,7 +229,20 @@ def _new_job(job_id: str, unit_id: str, batch: str, quality: str) -> dict:
 
 
 def unit(root: Path, unit_id: str) -> dict:
-    return _find_unit(load(root), unit_id)
+    """The unit, refused with CineRecastError when its id, shots or qc_skip are not valid."""
+    return _checked(_find_unit(load(root), unit_id), f"unit {unit_id}")
+
+
+def units(root: Path) -> list[dict]:
+    """Every unit of the plan, refused with CineRecastError when one is not an object or has an
+    id, shots or qc_skip that is not valid."""
+    found = load(root)["units"]
+    for position, item in enumerate(found):
+        if not isinstance(item, dict):
+            raise CineRecastError(f"plan.json: units[{position}] must be an object; repair it, plan check lists "
+                                  "the problems")
+        _checked(item, f"units[{position}]")
+    return found
 
 
 # --- ids that are never reused ---------------------------------------------------------------
@@ -223,10 +259,7 @@ def _archives(root: Path) -> list[tuple[int, Path]]:
 def _archived_plans(root: Path) -> list[dict]:
     plans = []
     for _, path in _archives(root):
-        try:
-            data = read_json(path)
-        except ValueError as exc:
-            raise CineRecastError(f"archived plan is not valid JSON: {path}: {exc}") from exc
+        data = read_project_json(Path(root), path)
         plans.append(data if isinstance(data, dict) else {})
     return plans
 
@@ -424,8 +457,10 @@ def _casting_problems(root: Path) -> list[str]:
 def check(root: Path) -> list[str]:
     """Problems that keep the plan's jobs from being issued. An empty list means it is ready.
 
-    Each unit's stored inputs must be the inputs _unit_inputs derives from the swap table and the
-    method now, and fit the model's image_refs and video_ref as models.json gives them now.
+    Unit ids are 'u' followed by digits and job ids 'j' followed by digits; a unit's shots are a
+    non-empty list of shot numbers and its qc_skip a list of score names. Each unit's stored inputs
+    must be the inputs _unit_inputs derives from the swap table and the method now, and fit the
+    model's image_refs and video_ref as models.json gives them now.
     """
     root = Path(root)
     data = load(root)
@@ -440,6 +475,8 @@ def check(root: Path) -> list[str]:
             problems.append(f"units[{position}] must be an object.")
             continue
         label = f"unit {item.get('id')}" if is_text(item.get("id")) else f"units[{position}]"
+        shape = _unit_problems(item, label)
+        problems += shape
         prompt = item.get("prompt")
         if not isinstance(prompt, str) or not is_english_prompt(prompt):
             problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
@@ -460,10 +497,7 @@ def check(root: Path) -> list[str]:
                                     f"not {entry.get('role')!r}.")
                 if not resolve(root, path).is_file():
                     problems.append(f"{label}: input file not found: {path}")
-            derivable = (not cast_problems and method in METHODS and is_text(item.get("id"))
-                         and isinstance(shots, list) and bool(shots)
-                         and all(isinstance(s, int) and not isinstance(s, bool) for s in shots))
-            if derivable:
+            if not cast_problems and method in METHODS and not shape:
                 expected = _unit_inputs(root, item["id"], method, shots)
                 if inputs != expected:
                     problems.append(f"{label}: its inputs are not the inputs the swap table and method {method!r} "
@@ -501,6 +535,8 @@ def check(root: Path) -> list[str]:
         if not isinstance(job, dict):
             problems.append(f"jobs[{position}] must be an object.")
             continue
+        if not isinstance(job.get("id"), str) or not _JOB_ID.fullmatch(job["id"]):
+            problems.append(f"jobs[{position}]: id must be 'j' followed by digits, not {job.get('id')!r}.")
         if not models:
             continue
         try:

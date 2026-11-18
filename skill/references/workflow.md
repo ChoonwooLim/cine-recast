@@ -8,7 +8,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 첫 위치 인자는 항상 프로젝트 폴더다.
-- 성공하면 종료 코드 0, 거부되거나 입력이 틀리면 2이고 이유가 `error:` 줄로 나온다.
+- 성공하면 종료 코드 0, 거부되거나 입력이 틀리면 2이고 이유가 `error:` 줄로 나온다. 1은 도구의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast` 한 줄). 환경 변수 `CINE_RECAST_DEBUG=1`을 두면 그 뒤에 추적 정보가 붙는다.
+- 프로젝트의 JSON 파일(`project.json`, `analysis/video.json`, `analysis/cuts.json`, `casting.json`, `models.json`, `plan.json`, `assets.json`)은 UTF-8로 읽고, 맨 앞의 BOM은 받아들인다. UTF-8이 아니거나 JSON이 깨졌으면 `error: casting.json is not valid JSON: ... at line 3, column 5`처럼 파일 이름(프로젝트 폴더 기준)과 줄과 칸이 나오고, 꼭 있어야 할 키가 없거나 맨 위가 객체가 아니면 파일 이름과 키가 나온다.
 - `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
 - 예시의 id, 숫자, 경로는 예시다.
 
@@ -118,7 +119,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 출력: `casting ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
-- 검사하는 것: 요소의 `id`, `kind`, `shots`, `look`. 교체표의 요소가 요소 목록에 있는지, 요소 하나에 교체 하나인지, 이미지 파일이 있고 `.jpg`, `.jpeg`, `.png`, `.webp`인지. 모든 문자열에 한자가 없는지.
+- 검사하는 것: 먼저 형식. 맨 위가 객체이고 `elements`와 `swaps`가 객체의 목록인지, 요소의 `id`, `kind`, `name`, `look`이 문자열이고 `shots`가 정수 목록인지, 교체의 `element`가 문자열이고 `images`가 문자열 목록인지. 형식이 틀린 곳도 문제 한 줄씩으로 나온다. 그다음 요소의 `id`(끝에 줄바꿈이 붙은 id도 거부), `kind`, `shots`, `look`. 교체표의 요소가 요소 목록에 있는지, 요소 하나에 교체 하나인지, 이미지 파일이 있고 `.jpg`, `.jpeg`, `.png`, `.webp`인지. 모든 문자열에 한자가 없는지.
 - 권리: 인물을 교체하면 `likeness_consent`가 `yes`여야 한다. `not_applicable`은 인물 교체 이미지가 모두 이 프로젝트에서 참조 이미지 없이 생성한 파일일 때만 통과한다. 배경을 교체하면 `background_rights`에 답이 있어야 하고, `reference_rights`에는 언제나 답이 있어야 한다.
 
 ### models check
@@ -248,6 +249,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: `plan ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
 - 검사하는 것: 단위의 프롬프트가 비어 있지 않은 영어인지, 입력 파일이 있는지, 길이와 화면비와 해상도가 모델 범위 안인지, 견적 뒤에 `params`나 입력이 바뀌지 않았는지.
+- 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지. 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
 - 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan build --replace`로 계획을 다시 만들라는 문제가 나온다. 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
 - 모델: 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
 
@@ -305,6 +307,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 쓰는 것: `ledger.jsonl`. 출력: `approved batch draft-1: limit 80.0 credits (by owner)`.
 - 같은 묶음에 다시 실행하면 한도가 더해진다. 추가 승인에는 추가분만 적는다.
+- 거부: 장부가 손상돼 있다(`ledger line N is invalid`). 손상된 장부에는 아무것도 덧붙이지 않는다.
 
 ### jobs next
 
@@ -352,7 +355,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `provider_ids`(끝난 작업의 Higgsfield 작업 id).
-- `ok`가 `false`면 종료 코드 2. `problems`에 `ledger line 16 is invalid: ...`처럼 문제 줄이 적힌다.
+- `ok`가 `false`면 종료 코드 2. `problems`에 `ledger line 16 is invalid: ...`처럼 문제 줄이 적힌다. UTF-8로 읽을 수 없는 줄도 문제 줄 하나로 적히고 나머지 줄은 그대로 읽힌다.
 
 ### conform
 
@@ -453,8 +456,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | --- | --- |
 | `elements[].id` | 영문 소문자로 시작하고 소문자, 숫자, 밑줄로 된 2-24자. 겹치면 안 된다 |
 | `elements[].kind` | `person`, `creature`, `prop`, `background` |
-| `elements[].name` | 보고서에 나오는 이름. 한글도 된다 |
-| `elements[].shots` | 그 요소가 보이는 숏 번호. 비어 있으면 안 된다 |
+| `elements[].name` | 보고서에 나오는 이름. 문자열이고 한글도 된다 |
+| `elements[].shots` | 그 요소가 보이는 숏 번호(정수). 비어 있으면 안 된다 |
 | `elements[].look` | 원본에서 보이는 모습. 영어 |
 | `swaps[].element` | 교체할 요소의 id. 요소 하나에 항목 하나 |
 | `swaps[].images` | 교체 이미지. 한 장 이상이고, 상대 경로는 프로젝트 폴더 기준이다 |

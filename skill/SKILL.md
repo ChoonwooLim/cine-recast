@@ -30,7 +30,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - bash에서는 `pwsh -NoProfile -File "$HOME/.cine-recast/bin/cine-recast.ps1" <명령> <인자>`로 부른다.
 - 첫 위치 인자는 항상 프로젝트 폴더다. 예시에 나오는 id, 숫자, 경로는 예시이므로 실제 출력에서 읽은 값으로 바꿔 쓴다.
-- 종료 코드 0은 성공, 2는 거부 또는 잘못된 입력이다. 2가 나오면 `error:`로 시작하는 줄(검사 명령은 문제 목록)을 읽고 거기 적힌 대로 조치한다. 거부는 고장이 아니라 안전장치다. 프로젝트 파일을 손으로 고쳐 우회하지 않는다.
+- 종료 코드 0은 성공, 2는 거부 또는 잘못된 입력이다. 2가 나오면 `error:`로 시작하는 줄(검사 명령은 문제 목록)을 읽고 거기 적힌 대로 조치한다. 거부는 고장이 아니라 안전장치다. 프로젝트 파일을 손으로 고쳐 우회하지 않는다. 손으로 쓴 JSON 파일이 깨졌으면 그 줄이 파일 이름과 줄, 칸을 알려 준다.
+- 종료 코드 1은 도구 자체의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast`). 멈추고 그 줄을 그대로 사용자에게 알린다. 다른 방법으로 돌아가거나 파일을 고쳐 피하지 않는다.
 - PowerShell에서 쉼표가 든 값은 따옴표로 감싼다(`--cuts "88,130"`). 감싸지 않으면 인자 여러 개로 쪼개진다.
 - `--version`이 `cine-recast 0.1.0` 같은 줄을 내지 않으면 도구가 설치되지 않은 것이다. cine-recast 저장소 폴더에서 `pwsh -NoProfile -File install.ps1`을 실행해야 한다고 사용자에게 알린다.
 
@@ -312,6 +313,7 @@ Replace the teenage boy riding the dragon with the woman shown in the first refe
 ## 멈추고 사용자에게 알릴 때
 
 - Higgsfield 연결이 없다(규칙 10).
+- 명령이 종료 코드 1로 끝났다. 도구의 결함이다.
 - `jobs next`나 `assets next`가 한도 초과로 거부했다. 추가 승인 없이는 더 가지 않는다.
 - 명령이 `ledger line N is invalid`로 멈춘다. 장부가 손상된 것이다. 생성을 멈추고 `audit`으로 문제 줄을 확인해 사용자에게 보고한다. `ledger.jsonl`은 직접 고치지 않는다.
 - 생성 호출이 시간 초과로 끊겨 결과를 모른다. 다시 제출하지 말고 먼저 조회한다(generation-jobs.md).

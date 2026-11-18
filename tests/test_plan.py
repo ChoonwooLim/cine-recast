@@ -687,6 +687,74 @@ def test_jobs_done_takes_a_downloaded_file_inside_the_project(planned3, clip3):
     assert record_done(planned3.root, "j0001", "prov-1", 9.0, downloaded)["take"] == "t001"
 
 
+# --- final-review wave: hand-written plan.json and models.json ---
+
+@pytest.mark.parametrize("mutate, fragment", [
+    (lambda d: (d["units"][0].update(id="..\\..\\evil"), d["jobs"][0].update(unit="..\\..\\evil")), "id"),
+    (lambda d: d["units"][0].update(id="u01\n"), "id"),
+    (lambda d: d["jobs"][0].update(id="j0001/x"), "id"),
+    (lambda d: d["jobs"][0].update(id=1), "id"),
+    (lambda d: d["units"][0].update(shots="1, 2, 3"), "shots"),
+    (lambda d: d["units"][0].update(shots=[]), "shots"),
+    (lambda d: d["units"][0].update(shots=[1, "2"]), "shots"),
+    (lambda d: d["units"][0].update(qc_skip="color"), "qc_skip"),
+    (lambda d: d["units"][0].update(qc_skip=["colour"]), "qc_skip"),
+])
+def test_check_validates_ids_shots_and_qc_skip(planned3, capsys, mutate, fragment):
+    data = read_json(planned3.plan_file)
+    mutate(data)
+    write_json(planned3.plan_file, data)
+    assert any(fragment in p for p in check(planned3.root))
+    capsys.readouterr()
+    assert main(["plan", "check", str(planned3.root)]) == 2
+    assert not capsys.readouterr().err.startswith("error: ")              # problem lines, not a refusal
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda u: u.update(id="..\\..\\evil"),
+    lambda u: u.update(shots="1, 2, 3"),
+    lambda u: u.update(qc_skip=["colour"]),
+])
+def test_commands_refuse_a_damaged_unit_cleanly(finished3, capsys, mutate):
+    _edit_unit(finished3, mutate)
+    unit_id = read_json(finished3.plan_file)["units"][0]["id"]
+    for command in (["assemble", str(finished3.root)], ["report", str(finished3.root)],
+                    ["qc", str(finished3.root), "--unit", unit_id, "--take", "t001"],
+                    ["conform", str(finished3.root), "--unit", unit_id, "--take", "t001"]):
+        capsys.readouterr()
+        assert main(command) == 2, command
+        assert capsys.readouterr().err.startswith("error: ")
+    assert not (finished3.root.parent / "evil").exists()
+
+
+@pytest.mark.parametrize("text, fragment", [
+    ("{", "line 1, column 2"),
+    ("[]", "top level"),
+    ('{"units": [], "jobs": {}}', "'jobs'"),
+    ('{"jobs": []}', "'units'"),
+])
+def test_a_damaged_plan_file_is_named(planned3, capsys, text, fragment):
+    planned3.plan_file.write_text(text, encoding="utf-8")
+    capsys.readouterr()
+    assert main(["plan", "check", str(planned3.root)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: plan.json") and fragment in err
+
+
+def test_byte_order_marks_are_accepted(planned3, capsys):
+    for path in (planned3.plan_file, planned3.models_file, planned3.project_file, planned3.video_file):
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    capsys.readouterr()
+    assert main(["models", "check", str(planned3.root)]) == 0
+    assert main(["plan", "check", str(planned3.root)]) == 0
+
+
+def test_models_file_errors_are_problem_lines(planned3):
+    planned3.models_file.write_text('{"models": [}', encoding="utf-8")
+    [problem] = check_models(planned3.root)
+    assert "models.json" in problem and "line 1, column 13" in problem
+
+
 def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
     import cine_recast.plan as plan_module
 

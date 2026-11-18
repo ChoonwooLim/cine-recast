@@ -6,7 +6,7 @@ from cine_recast import ledger, plan
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.casting import load as load_casting
 from cine_recast.errors import CineRecastError
-from cine_recast.jsonio import read_json
+from cine_recast.jsonio import read_project_json
 from cine_recast.paths import ProjectPaths
 from cine_recast.project import RIGHTS_ITEMS, load_project
 
@@ -70,12 +70,15 @@ def _swap_table(root: Path) -> list[str]:
         data = load_casting(root)
     except CineRecastError:
         return [*lines, "casting.json이 없습니다.", ""]
-    swaps = {s.get("element"): s for s in data.get("swaps") or [] if isinstance(s, dict)}
+    if not isinstance(data, dict) or not isinstance(data.get("elements"), list) or not isinstance(data.get("swaps"), list):
+        return [*lines, "casting.json의 형식이 맞지 않습니다.", ""]
+    swaps = {s.get("element"): s for s in data["swaps"] if isinstance(s, dict) and isinstance(s.get("element"), str)}
     lines += ["| 요소 | 종류 | 이름 | 숏 | 교체 이미지 | 메모 |", "| --- | --- | --- | --- | --- | --- |"]
-    for element in data.get("elements") or []:
-        swap = swaps.get(element.get("id"))
-        images = ", ".join(Path(p).name for p in (swap or {}).get("images") or []) if swap else "교체 없음"
-        shots = ", ".join(str(n) for n in element.get("shots") or [])
+    for element in (e for e in data["elements"] if isinstance(e, dict)):
+        swap = swaps.get(element.get("id")) if isinstance(element.get("id"), str) else None
+        images = ", ".join(Path(p).name for p in (swap or {}).get("images") or [] if isinstance(p, str)) \
+            if swap else "교체 없음"
+        shots = ", ".join(str(n) for n in element.get("shots") or []) if isinstance(element.get("shots"), list) else ""
         lines.append("| " + " | ".join(_cell(v) for v in (
             element.get("id"), element.get("kind"), element.get("name"), shots,
             images or _NONE, (swap or {}).get("note"))) + " |")
@@ -84,10 +87,11 @@ def _swap_table(root: Path) -> list[str]:
 
 def _scores(pp: ProjectPaths, item: dict) -> dict:
     take_id = item.get("selected_take")
-    path = pp.take_dir(item["id"], take_id) / "scores.json" if take_id else None
+    path = pp.take_dir(item["id"], take_id) / "scores.json" if isinstance(take_id, str) and take_id else None
     if path is None or not path.is_file():
         return {}
-    return (read_json(path).get("shots") or {})
+    shots = read_project_json(pp.root, path, {}).get("shots")
+    return shots if isinstance(shots, dict) else {}
 
 
 def _shot_table(root: Path, units: list[dict]) -> tuple[list[str], list[int], list[int]]:
@@ -133,7 +137,7 @@ def write_report(root: Path) -> Path:
     """Write out/report.md and return its path."""
     root = Path(root)
     pp = ProjectPaths(root)
-    units = [u for u in plan.load(root)["units"] if isinstance(u, dict)]
+    units = plan.units(root)
     shot_lines, retry, copies = _shot_table(root, units)
     unselected = [u["id"] for u in units if not u.get("selected_take")]
     open_lines = ["## 열린 항목", ""]

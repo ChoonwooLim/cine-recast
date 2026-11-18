@@ -26,7 +26,7 @@ from cine_recast import casting, ledger
 from cine_recast.analyze import load_video
 from cine_recast.casting import ID_PATTERN, IMAGE_SUFFIXES
 from cine_recast.errors import CineRecastError
-from cine_recast.jsonio import read_json, write_json
+from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.lifecycle import (SENT, digest, fail, finish, highest, is_text, issue_in_order, quote, reconcile,
                                    require_issued, require_result, resolve, stale_quote)
 from cine_recast.paths import ProjectPaths, inside_folder
@@ -45,15 +45,10 @@ _NOUN, _QUOTE_COMMAND = "asset", "assets set-cost"
 
 def _load(root: Path) -> dict:
     """assets.json with every asset's state reconciled from the ledger; no assets when it is missing."""
-    path = ProjectPaths(Path(root)).assets_file
-    if not path.exists():
+    pp = ProjectPaths(Path(root))
+    if not pp.assets_file.exists():
         return {"assets": []}
-    try:
-        data = read_json(path)
-    except ValueError as exc:
-        raise CineRecastError(f"assets.json is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
-        raise CineRecastError("assets.json must hold the list 'assets'")
+    data = read_project_json(pp.root, pp.assets_file, {"assets": list})
     reconcile(root, data["assets"])
     return data
 
@@ -88,7 +83,7 @@ def _elements(root: Path) -> dict[str, dict]:
     if not isinstance(elements, list):
         return {}
     return {e["id"]: e for e in elements
-            if isinstance(e, dict) and isinstance(e.get("id"), str) and ID_PATTERN.match(e["id"])}
+            if isinstance(e, dict) and isinstance(e.get("id"), str) and ID_PATTERN.fullmatch(e["id"])}
 
 
 # --- payloads and checks -------------------------------------------------------------------
@@ -290,7 +285,7 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
     data = _load(root)
     asset = require_issued(_find(data, asset_id), noun=_NOUN)
     element = asset.get("element")
-    if not _ASSET_ID.match(asset_id) or not isinstance(element, str) or not ID_PATTERN.match(element):
+    if not _ASSET_ID.fullmatch(asset_id) or not isinstance(element, str) or not ID_PATTERN.fullmatch(element):
         raise CineRecastError(f"asset {asset_id}: its id and element {element!r} must be valid ids to name its files")
     require_result(asset, provider_id, credits, noun=_NOUN)
     sources = [Path(file) for file in files]
@@ -366,7 +361,7 @@ def _stored_files(root: Path, element: str, *, ref_free: bool) -> list[str]:
             and (not ref_free or _sent_without_refs(a))]
     for asset in sorted(done, key=_number):
         aid = asset.get("id")
-        if not isinstance(aid, str) or not _ASSET_ID.match(aid) or not isinstance(asset.get("files"), list):
+        if not isinstance(aid, str) or not _ASSET_ID.fullmatch(aid) or not isinstance(asset.get("files"), list):
             continue
         name = re.compile(rf"{re.escape(folder)}/{re.escape(aid)}_[1-9][0-9]*({suffixes})")
         found += [f for f in asset["files"] if isinstance(f, str) and name.fullmatch(f) and (root / f).is_file()]

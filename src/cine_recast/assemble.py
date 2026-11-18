@@ -24,7 +24,7 @@ def _clips_by_shot(root: Path) -> dict[int, Path]:
     """The conformed clip of every shot, taken from each unit's selected take."""
     pp = ProjectPaths(root)
     clips: dict[int, Path] = {}
-    for item in plan.load(root)["units"]:
+    for item in plan.units(root):
         unit_id = item["id"]
         take_id = item.get("selected_take")
         if not take_id:

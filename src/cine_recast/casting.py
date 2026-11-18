@@ -5,7 +5,7 @@ from pathlib import Path
 
 from cine_recast.analyze import load_shots
 from cine_recast.errors import CineRecastError
-from cine_recast.jsonio import read_json, write_json
+from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.paths import ProjectPaths
 from cine_recast.project import load_project
 from cine_recast.textrules import han_chars, is_english_prompt
@@ -33,11 +33,16 @@ def write_template(root: Path) -> Path:
     return path
 
 
-def load(root: Path) -> dict:
+def load(root: Path):
+    """casting.json as written. Its shape is not checked here: check() reports it problem by problem."""
     pp = ProjectPaths(Path(root))
     if not pp.casting_file.is_file():
         raise CineRecastError(f"casting.json not found: {pp.casting_file}")
-    return read_json(pp.casting_file)
+    return read_project_json(pp.root, pp.casting_file)
+
+
+def _is_shot_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(s, int) and not isinstance(s, bool) for s in value)
 
 
 def _strings(value, where: str):
@@ -95,6 +100,10 @@ def _virtual_person_problem(root: Path, images: list[tuple[str, object]]) -> str
 def check(root: Path) -> list[str]:
     """Problems found in casting.json as English sentences. An empty list means it is valid.
 
+    The shape comes first, each fault one problem: the top level is an object, elements and swaps
+    are lists of objects, an element's id, kind, name and look are strings and its shots a list of
+    whole numbers, a swap's element is a string and its images a list of strings.
+
     A person swap needs likeness_consent "yes", or "not_applicable" when every image of every
     person swap is a file this project generated for that element from an asset without reference
     images (a virtual person).
@@ -105,10 +114,14 @@ def check(root: Path) -> list[str]:
     shot_numbers = {shot.index for shot in load_shots(root)}
     problems: list[str] = []
 
-    elements = data.get("elements", [])
-    swaps = data.get("swaps", [])
-    if not isinstance(elements, list) or not isinstance(swaps, list):
-        return ["casting.json must hold the lists 'elements' and 'swaps'."]
+    if not isinstance(data, dict):
+        return ["casting.json must hold a JSON object at the top level, with the lists 'elements' and 'swaps'."]
+    elements, swaps = data.get("elements"), data.get("swaps")
+    for key, value in (("elements", elements), ("swaps", swaps)):
+        if not isinstance(value, list):
+            problems.append(f"casting.json must hold the list {key!r} (a list of objects).")
+    if problems:
+        return problems
 
     for where, text in _strings(data, "casting"):
         found = han_chars(text)
@@ -122,17 +135,19 @@ def check(root: Path) -> list[str]:
             continue
         eid = element.get("id")
         label = f"element {eid!r}" if isinstance(eid, str) and eid else f"elements[{position}]"
-        if not isinstance(eid, str) or not ID_PATTERN.match(eid):
-            problems.append(f"{label}: id must match ^[a-z][a-z0-9_]{{1,23}}$.")
+        if not isinstance(eid, str) or not ID_PATTERN.fullmatch(eid):
+            problems.append(f"{label}: id must be a string matching ^[a-z][a-z0-9_]{{1,23}}$.")
         elif eid in ids:
             problems.append(f"{label}: duplicate element id.")
         else:
             ids[eid] = element
-        if element.get("kind") not in ELEMENT_KINDS:
+        if not isinstance(element.get("kind"), str) or element.get("kind") not in ELEMENT_KINDS:
             problems.append(f"{label}: kind must be one of {', '.join(ELEMENT_KINDS)}.")
+        if not isinstance(element.get("name"), str):
+            problems.append(f"{label}: name must be a string.")
         shots = element.get("shots")
-        if not isinstance(shots, list) or not shots:
-            problems.append(f"{label}: shots must be a non-empty list of shot numbers.")
+        if not _is_shot_list(shots) or not shots:
+            problems.append(f"{label}: shots must be a non-empty list of shot numbers (whole numbers).")
         else:
             unknown = [s for s in shots if s not in shot_numbers]
             if unknown:
@@ -152,7 +167,9 @@ def check(root: Path) -> list[str]:
             continue
         name = swap.get("element")
         label = f"swap for {name!r}" if isinstance(name, str) else f"swaps[{position}]"
-        if name not in ids:
+        if not isinstance(name, str):
+            problems.append(f"{label}: element must be the id of an element (a string).")
+        elif name not in ids:
             problems.append(f"{label}: element does not exist in the element list.")
         else:
             swapped_kinds.add(str(ids[name].get("kind")))
@@ -164,7 +181,10 @@ def check(root: Path) -> list[str]:
         if not isinstance(images, list) or not images:
             problems.append(f"{label}: images must list at least one image file.")
             continue
-        if name in ids and ids[name].get("kind") == "person":
+        if not all(isinstance(image, str) for image in images):
+            problems.append(f"{label}: images must be a list of file paths (strings).")
+            continue
+        if isinstance(name, str) and name in ids and ids[name].get("kind") == "person":
             person_images += [(name, image) for image in images]
         for image in images:
             path = Path(image) if isinstance(image, str) else None
@@ -173,7 +193,7 @@ def check(root: Path) -> list[str]:
             elif not (root / path).is_file():  # a relative path is relative to the project folder
                 problems.append(f"{label}: image file not found: {image}")
 
-    consent = answer(rights,"likeness_consent")
+    consent = answer(rights, "likeness_consent")
     if "person" in swapped_kinds and consent == "not_applicable":
         problem = _virtual_person_problem(root, person_images)
         if problem:
@@ -181,10 +201,10 @@ def check(root: Path) -> list[str]:
     elif "person" in swapped_kinds and consent != "yes":
         problems.append("A person is replaced but likeness_consent is not answered 'yes'; "
                         "record it with: rights set --item likeness_consent --answer yes")
-    if "background" in swapped_kinds and answer(rights,"background_rights") is None:
+    if "background" in swapped_kinds and answer(rights, "background_rights") is None:
         problems.append("A background is replaced but background_rights is not answered; "
                         "record it with: rights set --item background_rights")
-    if answer(rights,"reference_rights") is None:
+    if answer(rights, "reference_rights") is None:
         problems.append("reference_rights is not answered; "
                         "record it with: rights set --item reference_rights")
     return problems

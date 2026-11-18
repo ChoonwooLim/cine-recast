@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import append_jsonl
 from cine_recast.ledger import approve, audit, batch_status, done, fail, issue, job_states
@@ -153,6 +156,38 @@ def test_unicode_line_separators_in_text_do_not_break_the_ledger(tmp_path, char)
     fail(tmp_path, "j1", f"x{char}y")
     report = audit(tmp_path)
     assert report["ok"] is True and report["problems"] == []
+
+
+def test_a_line_that_is_not_utf8_is_one_more_invalid_line(tmp_path):
+    approve(tmp_path, "b", 100.0, "owner")
+    with ProjectPaths(tmp_path).ledger_file.open("ab") as handle:
+        handle.write(b'{"type": "job_failed", "time": "x", "job_id": "j1", "reason": "\xff\xfe", "credits": 0}\n')
+    report = audit(tmp_path)
+    assert report["ok"] is False and any(p.startswith("ledger line 2 is invalid") for p in report["problems"])
+    with pytest.raises(CineRecastError, match="line 2"):
+        batch_status(tmp_path, "b")
+
+
+def test_cli_audit_and_approve_on_a_ledger_with_bytes_that_are_not_utf8(project3, capsys):
+    root = str(project3.root)
+    project3.ledger_file.write_bytes(b'{"type": "approval", "time": "x", "batch": "b", "limit_credits": 50, '
+                                     b'"by": "o"}\n\xff\xfe broken\n')
+    before = project3.ledger_file.read_bytes()
+    capsys.readouterr()
+    assert main(["audit", root]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is False and report["problems"][0].startswith("ledger line 2 is invalid")
+    assert main(["approve", root, "--batch", "b", "--limit", "5", "--by", "o"]) == 2
+    assert "line 2" in capsys.readouterr().err and project3.ledger_file.read_bytes() == before
+
+
+def test_approve_refuses_to_append_to_a_damaged_ledger(tmp_path):
+    approve(tmp_path, "b", 100.0, "owner")
+    _raw(tmp_path, _BAD_LINES["misspelled_type"])
+    before = ProjectPaths(tmp_path).ledger_file.read_bytes()
+    with pytest.raises(CineRecastError, match="line 2"):
+        approve(tmp_path, "b", 10.0, "owner")
+    assert ProjectPaths(tmp_path).ledger_file.read_bytes() == before
 
 
 def test_job_states(tmp_path):

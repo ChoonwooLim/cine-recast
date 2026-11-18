@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cine_recast.errors import CineRecastError
-from cine_recast.jsonio import read_json, write_json
+from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.paths import ProjectPaths
 
 RIGHTS_ITEMS = ("reference_rights", "likeness_consent", "background_rights")
@@ -44,7 +44,7 @@ def load_project(root: Path) -> dict:
     pp = ProjectPaths(Path(root))
     if not pp.project_file.is_file():
         raise CineRecastError(f"not a project folder (project.json missing): {root}")
-    return read_json(pp.project_file)
+    return read_project_json(pp.root, pp.project_file, {"reference": str, "rights": dict})
 
 
 def set_right(root: Path, item: str, answer: str, note: str = "") -> None:
