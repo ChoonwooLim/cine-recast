@@ -263,3 +263,66 @@ def _planned3_template(tmp_path_factory, _cast3_template) -> Path:
 def planned3(_planned3_template, tmp_path):
     """An isolated copy of the planned project: one unit u01 (shots 1-3), one job j0001."""
     return _copy_project(_planned3_template, tmp_path)
+
+
+def planned_project(root: Path, clip: Path):
+    """Build a project from `clip` up to a plan that must hold exactly one unit.
+
+    init, analyze, an empty casting with every rights item answered, the example model, then
+    plan build. Returns the ProjectPaths; the plan's unit id is on it as `unit_id`.
+    """
+    from cine_recast.analyze import analyze
+    from cine_recast.jsonio import write_json
+    from cine_recast.plan import build
+    from cine_recast.project import RIGHTS_ITEMS, init_project, set_right
+
+    root = Path(root)
+    pp = init_project(root, clip, "t")
+    analyze(root)
+    write_json(pp.casting_file, {"elements": [], "swaps": []})
+    for item in RIGHTS_ITEMS:
+        set_right(root, item, "yes")
+    write_models(root)
+    units = build(root, model="seedance_2_5", method="edit", batch="b")["units"]
+    if len(units) != 1:
+        raise RuntimeError(f"planned_project expects one unit, the plan has {[u['id'] for u in units]}")
+    pp.unit_id = units[0]["id"]
+    return pp
+
+
+def fake_take(root: Path, unit_id: str, tmp_path: Path, *, size: tuple[int, int] = (640, 360),
+              fps: str | None = None, extra_frames: int = 12, filters: str = "") -> str:
+    """Register a stand-in take for a unit, made from the unit's reference clip, and return its id.
+
+    The clip is scaled to `size`, converted to frame rate `fps` when given (None keeps the
+    reference rate), passed through `filters` (an ffmpeg filter chain) when given, and then gets
+    its last frame repeated `extra_frames` times, or loses that many frames from its end when
+    extra_frames is negative. extra_frames counts in the take's own frame rate.
+    """
+    from cine_recast.ffmpeg import probe
+    from cine_recast.paths import ProjectPaths
+    from cine_recast.takes import new_take
+
+    source = ProjectPaths(Path(root)).unit_dir(unit_id) / "ref.mp4"
+    folder = Path(tmp_path) / "fake_takes"
+    folder.mkdir(parents=True, exist_ok=True)
+    number = 1
+    while (folder / f"take{number:03d}.mp4").exists():
+        number += 1
+    out = folder / f"take{number:03d}.mp4"
+    chain = [f"scale={size[0]}:{size[1]}", "setsar=1"]
+    if fps is not None:
+        chain.append(f"fps={fps}")
+    if filters:
+        chain.append(filters)
+    if extra_frames > 0:
+        chain.append(f"tpad=stop_mode=clone:stop={extra_frames}")
+    _run(["-i", str(source), "-vf", ",".join(chain), "-an", *_encode_args(out)])
+    if extra_frames < 0:
+        whole = out.with_name(f"{out.stem}_whole.mp4")
+        out.replace(whole)
+        keep = probe(whole).frames + extra_frames
+        if keep <= 0:
+            raise ValueError(f"extra_frames={extra_frames} leaves no frames")
+        _run(["-i", str(whole), "-vf", f"trim=end_frame={keep},setpts=PTS-STARTPTS", "-an", *_encode_args(out)])
+    return new_take(root, unit_id, out, {"job": "fake"})

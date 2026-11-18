@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, ledger, plan, takes
+from . import __version__, conform, ledger, plan, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -155,6 +155,14 @@ def _cmd_takes_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_conform(args: argparse.Namespace) -> int:
+    paths = conform.conform(Path(args.project), args.unit, args.take, start_frame=args.start_frame,
+                            allow_retime=args.allow_retime)
+    for path in paths:
+        print(path)
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cine-recast")
     parser.add_argument("--version", action="version", version=f"cine-recast {__version__}")
@@ -274,6 +282,16 @@ def _build_parser() -> argparse.ArgumentParser:
     takes_select.add_argument("--unit", required=True)
     takes_select.add_argument("--take", required=True)
     takes_select.set_defaults(func=_cmd_takes_select)
+
+    conform_p = sub.add_parser("conform", help="fit a take to the reference: one clip per shot, exact frame counts")
+    conform_p.add_argument("project", help="project folder")
+    conform_p.add_argument("--unit", required=True)
+    conform_p.add_argument("--take", required=True)
+    conform_p.add_argument("--start-frame", type=int, default=0,
+                           help="take frame (after the frame-rate conversion) that becomes the unit's first frame")
+    conform_p.add_argument("--allow-retime", action="store_true",
+                           help="resample a take that is too short evenly to the unit's frame count")
+    conform_p.set_defaults(func=_cmd_conform)
     return parser
 
 
