@@ -5,7 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import __version__, assemble, assets, conform, ledger, plan, qc, report, sound, takes
+from . import __version__, assemble, assets, conform, ledger, plan, qc, report, sound, soundtrack, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -263,6 +263,15 @@ def _cmd_sound_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sound_mix(args: argparse.Namespace) -> int:
+    result = soundtrack.mix(Path(args.project))
+    correlation = result["reference_correlation"]
+    print(result["path"])
+    print(f"loudness {result['loudness_after']} LUFS  peak {result['peak_dbfs']} dBFS  reference correlation "
+          f"{'none (the reference has no sound)' if correlation is None else correlation}")
+    return 0
+
+
 def _cmd_approve(args: argparse.Namespace) -> int:
     root = Path(args.project)
     load_project(root)  # never start a ledger outside a project folder
@@ -328,7 +337,9 @@ def _cmd_qc(args: argparse.Namespace) -> int:
 
 def _cmd_assemble(args: argparse.Namespace) -> int:
     audio = Path(args.audio) if args.audio else None
-    print(assemble.assemble(Path(args.project), audio=audio))
+    result = assemble.assemble(Path(args.project), audio=audio, silent=args.silent)
+    print(result.path)
+    print(f"sound: {result.sound}")
     return 0
 
 
@@ -563,6 +574,10 @@ def _build_parser() -> argparse.ArgumentParser:
     muting.add_argument("--mute", action="store_true", help="leave the sound out of the mix")
     muting.add_argument("--unmute", action="store_true", help="put a muted sound back into the mix")
     sound_set.set_defaults(func=_cmd_sound_set)
+    sound_mix = sound_sub.add_parser("mix", help="mix the done, unmuted sounds into out/soundtrack.wav at -16 LUFS")
+    sound_mix.add_argument("project", help="project folder")
+    sound_mix.set_defaults(func=_cmd_sound_mix)
+
     approve = sub.add_parser("approve", help="record a credit approval for a batch")
     approve.add_argument("project", help="project folder")
     approve.add_argument("--batch", required=True)
@@ -619,9 +634,13 @@ def _build_parser() -> argparse.ArgumentParser:
     qc_p.add_argument("--take", required=True)
     qc_p.set_defaults(func=_cmd_qc)
 
-    assemble_p = sub.add_parser("assemble", help="join the selected takes into out/final.mp4 (and out/master.mov)")
+    assemble_p = sub.add_parser("assemble", help="join the selected takes into out/final.mp4 (and "
+                                                 "out/master.mov) with the soundtrack when one is mixed")
     assemble_p.add_argument("project", help="project folder")
-    assemble_p.add_argument("--audio", help="audio file to put in the film (the reference audio is never used)")
+    sound_choice = assemble_p.add_mutually_exclusive_group()
+    sound_choice.add_argument("--audio", help="audio file to put in the film instead of the soundtrack (the reference "
+                                              "audio is never used)")
+    sound_choice.add_argument("--silent", action="store_true", help="make the film without sound")
     assemble_p.set_defaults(func=_cmd_assemble)
 
     compare_p = sub.add_parser("compare", help="write out/compare.mp4: reference and result side by side")

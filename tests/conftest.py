@@ -524,3 +524,18 @@ def _finished3_template(tmp_path_factory, _conformed3_template) -> Path:
 def finished3(_finished3_template, tmp_path):
     """An isolated copy of the finished project: unit u01, take t001 conformed, scored and selected."""
     return _copy_project(_finished3_template, tmp_path)
+
+
+def fake_soundtrack(pp, *, samples: int = 180000, items: int = 3) -> None:
+    """Write out/soundtrack.wav (a 48 kHz stereo 24-bit tone of `samples` samples) and a soundtrack.json
+    holding its SHA-256 and `items` placed sounds, as sound mix would leave them."""
+    from cine_recast.jsonio import write_json
+    from cine_recast.paths import sha256_of
+
+    pp.out_dir.mkdir(parents=True, exist_ok=True)
+    _run(["-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000", "-af", f"atrim=end_sample={samples}",
+          "-ac", "2", "-c:a", "pcm_s24le", str(pp.soundtrack_file)])
+    write_json(pp.soundtrack_record, {
+        "sounds": [{"id": f"s{n:04d}", "kind": "sfx", "label": "tone", "start_seconds": 0.0, "at_frame": 0,
+                    "seconds": 1, "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.2} for n in range(1, items + 1)],
+        "sha256": sha256_of(pp.soundtrack_file)})
