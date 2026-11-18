@@ -42,9 +42,9 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 1. **승인 기록 없이 유료 생성을 실행하지 않는다.** 영상, 이미지, 소리 생성 호출은 `approve`로 묶음의 승인 한도가 장부에 기록된 뒤에만 한다. `approve`는 사용자가 승인한 범위 안에서만 실행한다. 사용자가 프로젝트 예산을 승인했으면(`budget set`) 그 예산 안에서 묶음마다 견적 합계를 기록하고, 사용자가 비용을 묻지 말라고 했으면 견적 합계를 그 말을 적은 메모와 함께 기록한다("비용 승인"). `--by`에는 언제나 승인한 사용자를 적는다. 이유: 크레딧은 사용자의 돈이고, 장부(`ledger.jsonl`)는 사용자가 얼마까지 허락했는지를 보여 주는 유일한 기록이다. 그래서 에이전트는 예산을 스스로 정하거나 올리지 않고, `ledger.jsonl`을 직접 고치거나 지우지 않는다.
 2. **도구가 `jobs next`, `assets next`, `sound next`, `extra next`로 내보낸 작업만, 내보낸 그대로 실행한다.** 이유: 도구는 장부가 받아 준 작업만 내보내므로, 그 출력에 없는 유료 호출은 승인 밖의 지출이다. 시험 삼아 하는 생성이나 업스케일 같은 다른 유료 기능도 마찬가지다. 모델, 길이, 해상도, 장수, 입력 파일을 바꿔 보내는 것도 견적과 다른 금액이 나가므로 같은 위반이다.
-3. **완성본에 원본의 프레임과 오디오를 넣지 않는다.** 테이크, 교체 자료, 소리로 등록하는 파일은 생성 작업이 돌려준 파일뿐이다. 이유: 완성본은 공개와 상업 이용이 목적이어서, 원본에서 복사한 화면이나 소리가 조금이라도 들어가면 쓸 수 없게 된다. 그래서 교체할 것이 없는 숏도 원본을 그대로 쓰지 않고 다시 생성하며, 참조 영상이나 그것을 가공한 파일을 `jobs done`과 `sound done`에 주지 않고, 원본의 소리를 `assemble --audio`에 주지 않으며, 원본이 들어 있는 `compare.mp4`와 `review.mp4`를 완성본으로 내놓지 않는다. 음악과 효과음은 이 영화를 위해 새로 생성하고, 원본의 소리는 어떤 생성의 입력으로도 쓰지 않는다. 스타일 참고용으로 올리는 것도 입력이다. 도구는 테이크와 자료 결과로 주는 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안의 파일(소리 결과는 `sounds/` 안의 파일까지), 참조 영상과 바이트가 같은 파일, `--audio`로 주는 `reference/`, `analysis/`, `takes/`, `out/` 안의 파일과 참조 영상과 바이트가 같은 파일을 거부한다. `sound mix`와 `assemble`은 믹스와 완성본에 넣을 소리(사운드트랙이든 `--audio` 파일이든)를 원본의 소리와 영화 전체와 2초 구간마다 견주어, 원본의 소리가 들어 있으면 거부한다. 그래도 원본의 자리에서 0.5초 넘게 옮긴 사본, 다른 소리 아래에 깊이 묻은 사본, 높이나 빠르기나 음색을 바꾼 사본까지 모두 알아보지는 못한다.
-4. **중국어를 쓰지 않는다.** 프롬프트, `casting.json`, 메모, 파일 이름, 사용자에게 주는 보고 어디에도 한자를 쓰지 않는다. 이유: 이 프로젝트의 고정 방침이고, 도구가 한자를 발견하면 검사를 실패시킨다. 영상 속 간판이나 자막에 한자가 보여도 옮겨 적지 않고 영어로 묘사한다.
-5. **프롬프트는 영어로 쓴다.** 생성 모델에 보내는 글(`plan.json`의 `prompt`, `assets add --prompt`, `sound add --prompt`)과 `casting.json`의 `look`은 영어다. 이유: 도구가 한글, 한자, 가나가 든 프롬프트를 거부한다. 사용자가 한국어로 준 묘사는 영어로 옮겨 쓰고, 옮긴 뜻을 한국어로 확인받는다. 모델에 보내지 않는 글인 메모(`--note`), 요소의 `name`, 소리의 `--label`은 한국어로 적어도 된다.
+3. **완성본에 원본의 프레임과 오디오를 넣지 않는다.** 테이크, 교체 자료, 소리로 등록하는 파일은 생성 작업이 돌려준 파일뿐이다. 이유: 완성본은 공개와 상업 이용이 목적이어서, 원본에서 복사한 화면이나 소리가 조금이라도 들어가면 쓸 수 없게 된다. 그래서 교체할 것이 없는 숏도 원본을 그대로 쓰지 않고 다시 생성하며, 참조 영상이나 그것을 가공한 파일을 `jobs done`과 `sound done`에 주지 않고, 원본의 소리를 `assemble --audio`에 주지 않으며, 원본이 들어 있는 `compare.mp4`와 `review.mp4`를 완성본으로 내놓지 않는다. 음악과 효과음은 이 영화를 위해 새로 생성하고, 원본의 소리는 어떤 생성의 입력으로도 쓰지 않는다. 스타일 참고용으로 올리는 것도 입력이다. 원본의 프레임은 원본에 없는 숏의 첫 프레임이나 끝 프레임으로도 쓰지 않는다. 도구는 `jobs done`, `assets done`, `sound done`, `extra done`에 결과로 주는 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/`, `sounds/`, `extras/`, `swap/` 안의 파일, 참조 영상과 바이트가 같은 파일, `--audio`로 주는 `reference/`, `analysis/`, `takes/`, `out/` 안의 파일과 참조 영상과 바이트가 같은 파일을 거부한다. `sound mix`와 `assemble`은 믹스와 완성본에 넣을 소리(사운드트랙이든 `--audio` 파일이든)를 원본의 소리와 영화 전체와 2초 구간마다 견주어, 원본의 소리가 들어 있으면 거부한다. 그래도 원본의 자리에서 0.5초 넘게 옮긴 사본, 다른 소리 아래에 깊이 묻은 사본, 높이나 빠르기나 음색을 바꾼 사본까지 모두 알아보지는 못한다.
+4. **중국어를 쓰지 않는다.** 프롬프트, `casting.json`, 메모, 파일 이름, 사용자에게 주는 보고 어디에도 한자를 쓰지 않는다. 이유: 이 프로젝트의 고정 방침이다. 도구는 한자가 든 프롬프트와 `look`, `casting.json`의 모든 글, 그리고 명령이 프로젝트 파일에 적는 자유 글(`--batch`, `--by`, `--note`, `--reason`, `--provider-id`, `--label`, `init --name`, `--ref`, `--start`, `--end`로 준 입력 이미지의 파일 이름)을 거부한다. 사용자에게 주는 보고는 도구가 보지 않으니 에이전트가 지킨다. 영상 속 간판이나 자막에 한자가 보여도 옮겨 적지 않고 영어로 묘사한다.
+5. **프롬프트는 영어로 쓴다.** 생성 모델에 보내는 글(`plan.json`의 `prompt`, `assets add --prompt`, `sound add --prompt`, `extra add --prompt`)과 `casting.json`의 `look`은 영어다. 이유: 도구가 한글, 한자, 가나가 든 프롬프트를 거부한다. 사용자가 한국어로 준 묘사는 영어로 옮겨 쓰고, 옮긴 뜻을 한국어로 확인받는다. 모델에 보내지 않는 글인 메모(`--note`), 요소의 `name`, 소리의 `--label`은 한국어로 적어도 된다.
 6. **권리 확인 세 항목은 사용자에게 묻고, 답을 그대로 기록한다.** 이유: 권리 판단은 사용자의 몫이고, 이 기록은 누가 무엇을 확인했는지의 근거다. 에이전트가 짐작으로 채우면 기록이 거짓이 된다. 검사를 통과시키려고 답을 바꾸지 않으며, 사용자가 모른다고 하면 `unknown`으로 적는다.
 7. **생성하는 인물의 프롬프트에 실존 인물을 지칭하지 않는다.** 이름, 별명, 배역으로 누군지 알 수 있는 표현, "누구를 닮은"을 쓰지 않고, 나이대, 체형, 머리, 의상, 분위기 같은 일반 묘사만 쓴다. 이유: 가상 인물은 누구의 초상도 아니라는 전제로 초상 동의 없이 통과되는데, 실존 인물을 가리켜 만들면 그 전제가 깨진다. 원본 배우를 닮게 해 달라는 요청도 같은 이유로 프롬프트에 넣지 않는다.
 8. **프로젝트 폴더는 저장소 밖 `%USERPROFILE%\Videos\cine-recast\<프로젝트>\`에 둔다.** 이유: 프로젝트 폴더에는 원본 영상, 인물 사진, 생성물이 들어가는데, git 저장소 안에 두면 공개 저장소로 올라갈 수 있다. 프로젝트 파일을 저장소로 복사하지도 않는다.
@@ -94,7 +94,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `ffmpeg -version`이 실행된다. 도구가 ffmpeg와 ffprobe를 쓴다.
 - 자신의 도구 목록에 이름이 `models_explore`, `generate_video`, `generate_image`, `generate_audio`, `jobs_wait`로 끝나는 도구가 있다. 없으면 Higgsfield 연결이 없는 것이니 규칙 10에 따라 먼저 사용자에게 알린다. 환경에 따라 도구가 불러오기 전까지 이름만 보이고 쓸 수 없는 경우가 있다. 그때는 환경의 방법으로 먼저 불러온다(Claude Code에서는 ToolSearch). 이름이 목록에 있으면 연결은 있는 것이다.
 
-그다음 아홉 단계를 차례로 한다. 이어서 하는 프로젝트라면 `& $cr audit $p`와 `jobs list`, `assets list`, `sound list`로 상태를 먼저 읽는다. 상태가 `issued`인 작업은 내보냈지만 결과가 기록되지 않은 것이므로 generation-jobs.md의 "끊긴 작업 이어가기"를 따른다. 어느 단계까지 왔는지는 프로젝트 폴더에 있는 파일로 알 수 있다(workflow.md의 폴더 구조).
+그다음 아홉 단계를 차례로 한다. 이어서 하는 프로젝트라면 `& $cr audit $p`와 `jobs list`, `assets list`, `sound list`, `extra list`로 상태를 먼저 읽는다. 상태가 `issued`인 작업은 내보냈지만 결과가 기록되지 않은 것이므로 generation-jobs.md의 "끊긴 작업 이어가기"를 따른다. 어느 단계까지 왔는지는 프로젝트 폴더에 있는 파일로 알 수 있다(workflow.md의 폴더 구조).
 
 ### 1. 가져오기
 
@@ -164,13 +164,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr assets use $p --element hero --image assets/hero/a0001_2.png
 ```
 
-서로 닿는 교체 요소(사람과 그가 탄 동물, 사람과 그가 든 소품)는 요소마다 따로 만든 참조 시트에 둘의 크기 관계가 담기지 않는다. 그러면 모델이 비율을 틀리고, 프롬프트로는 고쳐지지 않는다. 그래서 첫 영상 작업 전에 두 요소를 실제 비율로 함께 담은 짝 시트를 한 장 만든다. 둘 가운데 한 요소(사람과 다른 요소의 짝이면 사람이 아닌 쪽)의 자료로 `assets add`를 하고, 두 요소의 교체 시트를 모두 `--ref`로 넣는다. 인물의 시트(그 인물을 위해 생성한 파일이나 그 인물의 교체 이미지)를 `--ref`로 넣는 자료는 어느 요소의 자료이든 결과에 그 인물의 초상이 옮겨 오므로 `likeness_consent`가 `yes`여야 한다. 아니면 도구가 거부하니 사용자에게 묻는다. 고른 짝 시트는 그 요소의 `swaps[].images`에 두 번째 이미지로 더하고 `cast check`를 통과시킨다. 계획을 이미 만들었으면 그 요소가 나오는 단위마다 `plan unit`을 실행한다(7단계). 이미지가 하나 늘어나므로 단위의 이미지 입력 수가 모델의 `image_refs`를 넘지 않는지 본다.
+서로 닿는 교체 요소(사람과 그가 탄 동물, 사람과 그가 든 소품)는 요소마다 따로 만든 참조 시트에 둘의 크기 관계가 담기지 않는다. 그러면 모델이 비율을 틀리고, 프롬프트로는 고쳐지지 않는다. 그래서 첫 영상 작업 전에 두 요소를 실제 비율로 함께 담은 짝 시트를 한 장 만든다. 둘 가운데 한 요소(사람과 다른 요소의 짝이면 사람이 아닌 쪽)의 자료로 `assets add`를 하고, 두 요소의 교체 시트를 모두 `--ref`로 넣는다. 인물의 시트(그 인물을 위해 생성한 파일이나 그 인물의 교체 이미지)를 `--ref`로 넣는 자료는 어느 요소의 자료이든 결과에 그 인물의 초상이 옮겨 온다. 그래서 `--ref` 없이 글 설명만으로 만든 가상 인물의 시트면 `likeness_consent`가 `not_applicable`이어도 통과하고, 사진이나 사진을 참조로 만든 인물의 시트면 `yes`여야 한다. `yes`가 필요한데 아니면 도구가 거부하니 사용자에게 묻는다. 고른 짝 시트는 그 요소의 `swaps[].images`에 두 번째 이미지로 더하고 `cast check`를 통과시킨다. 계획을 이미 만들었으면 그 요소가 나오는 단위마다 `plan unit`을 실행한다(7단계). 이미지가 하나 늘어나므로 단위의 이미지 입력 수가 모델의 `image_refs`를 넘지 않는지 본다.
 
 ```powershell
 & $cr assets add $p --element dragon --prompt "The rider from the first reference image seated on the dragon from the second reference image, full side view at their true relative scale, plain grey backdrop, soft even light." --model image_model_x --batch assets-2 --aspect-ratio 16:9 --ref assets/hero/a0001_2.png --ref assets/dragon/a0003_1.png
 ```
 
-`--ref` 없이 글 설명만으로 만든 인물만 가상 인물이며, 이때만 `likeness_consent`가 `not_applicable`이어도 통과한다. 참조 사진을 넣어 만든 인물과 밖에서 가져온 사진은 `yes`가 필요하다. 사진 속 사람의 초상이 결과에 옮겨 오기 때문이다. 그래서 인물 자료에 `--ref`를 주려면 먼저 `likeness_consent`가 `yes`여야 하고, 배경 자료에 `--ref`를 주려면 `background_rights`에 답이 있어야 한다. 도구는 `assets add`, `assets set-cost`, `assets next`에서 그 순간의 요소 종류와 권리 답을 읽어 확인하고, 맞지 않으면 실행할 `rights set` 명령과 함께 거부한다.
+`--ref` 없이 글 설명만으로 만든 인물만 가상 인물이며, 이때만 `likeness_consent`가 `not_applicable`이어도 통과한다. 참조 사진을 넣어 만든 인물과 밖에서 가져온 사진은 `yes`가 필요하다. 사진 속 사람의 초상이 결과에 옮겨 오기 때문이다. 그래서 인물 자료에 `--ref`를 주려면 먼저 `likeness_consent`가 `yes`여야 하고, 배경 자료에 `--ref`를 주려면 `background_rights`에 답이 있어야 한다. `--ref`로 줄 수 있는 이미지는 이 프로젝트에서 생성해 장부에 끝난 것으로 기록된 파일(`assets list`의 `files`)과, 지금 교체표의 `swaps[].images`에 적힌 이미지뿐이다. 사용자가 준 사진은 `swap/`에 두고 그 사진에 나오는 요소의 `swaps[].images`에 적은 뒤에 쓴다. 도구는 누가 찍혔는지 모르는 그림을 받지 않고, 교체표에 적힌 이미지에는 `cast check`가 요구하는 권리 답이 따르기 때문이다. 도구는 `assets add`, `assets set-cost`, `assets next`에서 그 순간의 요소 종류, 교체표, 권리 답을 읽어 확인하고, 맞지 않으면 할 일(실행할 `rights set` 명령, 교체표에 적기, 자료로 생성하기)과 함께 거부한다.
 
 ```powershell
 & $cr cast check $p
@@ -229,21 +229,26 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr jobs done $p --job j0001 --provider-id 7c2f0e1a-5b1d-4c7e-9a43-0d6f2b8e1c55 --credits 38 --file "$p\downloads\j0001.mp4"
 ```
 
-`j0001: done, unit u01 take t001`처럼 테이크 id가 나온다. 테이크는 쌓이기만 하고 덮어쓰이지 않는다. 생성이 실패하면 `jobs fail`로 기록한다. 내보낸 작업은 반드시 둘 중 하나로 닫는다. 닫지 않은 작업은 견적만큼 한도를 차지하고, 계획을 바꾸는 것도 막는다.
+`j0001: done, unit u01 take t001`처럼 테이크 id가 나온다. 테이크는 쌓이기만 하고 덮어쓰이지 않는다. 생성이 실패하면 `jobs fail`로 기록한다. 제출 호출 자체가 돌려준 오류(HTTP 5xx, 게이트웨이나 연결 오류)는 실패가 아니라 결과를 모르는 것이므로(그런 호출도 접수돼 크레딧이 나간 일이 있었다) `jobs fail`로 기록하거나 다시 제출하지 말고 generation-jobs.md의 "결과를 모를 때"대로 먼저 조회한다. 내보낸 작업은 반드시 둘 중 하나로 닫는다. 닫지 않은 작업은 견적만큼 한도를 차지하고, 계획을 바꾸는 것도 막는다.
 
 ### 원본에 없는 숏
 
 사용자가 원본에 없는 숏(시작 숏, 두 숏을 이어 주는 숏, 끝 숏)을 원하면 `extra`로 만든다. 따로 생성한 클립은 기존 숏과 이어지지 않는다. 그래서 기존 숏으로 들어가거나 기존 숏에서 나오는 숏은 사용자가 확정한 테이크에서 시작한다.
 
-- 테이크를 늘린다(`--extend`). 그 숏 앞에 붙일 숏은 `backward`(새 클립이 테이크의 첫 프레임에서 끝난다), 뒤에 붙일 숏은 `forward`(테이크의 끝 프레임에서 시작한다)다. 모델이 참조 영상을 받아야 한다(`video_ref`).
-- 또는 테이크의 첫 프레임이나 끝 프레임을 새 클립의 끝(`--end`)이나 처음(`--start`)으로 준다. `U/T:FRAME`의 FRAME은 `first`, `last`, 또는 그 테이크 원본 파일의 프레임 번호다.
+- 확정한 숏의 첫 프레임이나 마지막 프레임을 새 클립의 끝(`--end`)이나 처음(`--start`)으로 준다. 이어 붙일 때는 `U/T:shot-first`와 `U/T:shot-last`를 쓴다. `conform`이 그 테이크에서 숏으로 남긴 첫 프레임과 마지막 프레임이고(숏 여럿인 단위면 첫 숏의 첫 프레임과 마지막 숏의 마지막 프레임), 테이크의 프레임 속도가 원본과 달라도 도구가 원본 파일의 프레임 번호로 바꿔 준다. 그래서 `conform`하지 않은 테이크에는 쓸 수 없다. `first`, `last`, 숫자는 테이크 원본 파일(`raw`)의 프레임이다. 패딩한 단위의 테이크에서 `last`는 숏이 끝난 뒤의 멈춘 화면이고, `--take-cuts`나 `--start-frame`으로 앞을 잘라 맞춘 테이크에서 `first`는 숏 앞의 여분이므로, 이어 붙이는 데 쓰지 않는다.
+- 또는 테이크를 늘린다(`--extend`). 그 숏 앞에 붙일 숏은 `backward`(새 클립이 테이크의 첫 프레임에서 끝난다), 뒤에 붙일 숏은 `forward`(테이크의 끝 프레임에서 시작한다)다. 모델이 참조 영상을 받아야 한다(`video_ref`). 늘리기는 테이크 원본 파일을 통째로 보낸다. 그래서 패딩한 단위의 테이크는 `forward`로 늘리지 않는다(도구가 거부한다). 끝에 숏이 아닌 멈춘 화면이 붙어 있어 모델이 거기서 이어 가기 때문이다. 그때는 `--start U/T:shot-last`로 숏의 마지막 프레임에서 시작한다. 앞을 잘라 맞춘 테이크는 같은 이유로 `backward` 대신 `--end U/T:shot-first`를 쓴다.
+- 이미지를 첫 프레임이나 끝 프레임으로 줄 수도 있다(`assets/`의 생성 파일이나 교체표에 적힌 `swap/`의 이미지). 원본의 프레임은 첫 프레임이나 끝 프레임이 될 수 없다. 모델은 그 그림을 거의 그대로 새 클립에 옮기므로 원본의 화면이 결과에 들어오기 때문이다. 도구는 주어진 그림을 원본의 모든 프레임과 견주어, 원본의 프레임이면 거부한다. 원본과 같은 장면에서 시작하는 숏이 필요하면 그 첫 장면 그림을 자료로 생성해(`assets add`) 그 파일을 준다.
 
 ```powershell
 & $cr extra add $p --label "roar" --prompt "The giant raises its head and roars at the camera, then lowers it, the same place, light and camera as the shot that follows." --model seedance_2_5 --seconds 4 --batch extra-1 --extend u01/t001 --direction backward --quality final
-& $cr extra add $p --label "bridge" --prompt "The rider turns the dragon toward the cliff, the same place and light as both shots." --model seedance_2_5 --seconds 5 --batch extra-1 --start u01/t001:last --end u02/t002:first --quality final
+& $cr extra add $p --label "bridge" --prompt "The rider turns the dragon toward the cliff, the same place and light as both shots." --model seedance_2_5 --seconds 5 --batch extra-1 --start u01/t001:shot-last --end u02/t002:shot-first --quality final
 ```
 
-`extra add`는 id(`x0001`)를 낸다. 그다음은 영상 작업과 같다. 가격을 물어 `extra set-cost`로 기록하고, "비용 승인"대로 승인한 뒤 `extra next`로 내보내고, 생성해 `extra done`으로 등록한다(generation-jobs.md의 "원본에 없는 숏 작업 하나의 순서"). 결과(`extras/x0001/take.mp4`)는 다른 테이크처럼 사용자가 눈으로 보고 받아들일지 정한다. 원본에 없는 숏은 사용자가 따로 쓰는 컷이고, 원본을 숏마다 다시 만드는 `assemble`에는 들어가지 않는다.
+`--ref`, `--start`, `--end`로 주는 이미지에는 자료의 `--ref`와 같은 규칙이 따른다(3단계). 프로젝트의 `assets/`에 저장된 생성 파일이거나, `swap/`에 있고 지금 교체표에 적힌 이미지여야 하고, 인물의 초상이 담긴 그림(인물의 사진, 사진으로 만든 인물의 시트, 그 시트로 만든 짝 시트)은 `likeness_consent`가 `yes`여야 한다. `--ref` 없이 만든 가상 인물의 그림은 `not_applicable`로도 된다. 도구는 이것을 `extra add`, `extra set-cost`, `extra next`에서 매번 다시 확인한다. `cast check`는 교체표만 보므로 이 입력들은 보지 않는다.
+
+`extra add`는 id(`x0001`)를 낸다. 그다음은 영상 작업과 같다. 가격을 물어 `extra set-cost`로 기록하고, "비용 승인"대로 승인한 뒤 `extra next`로 내보내고, 생성해 `extra done`으로 등록한다(generation-jobs.md의 "원본에 없는 숏 작업 하나의 순서"). 결과(`extras/x0001/take.mp4`)는 다른 테이크처럼 사용자가 눈으로 보고 받아들일지 정한다. 원본에 없는 숏은 사용자가 따로 쓰는 컷이고, 원본을 숏마다 다시 만드는 `assemble`에는 들어가지 않는다. 그 클립에 든 소리는 도구가 검사하지 않고 어디에도 쓰지 않는다(편집 모델의 테이크를 늘린 클립에는 원본의 소리가 남아 있을 수 있다).
+
+서비스의 안전 필터나 권리 필터가 원본에 없는 숏을 거부하면 `extra fail`로 닫는다. 그다음 할 수 있는 것은 그 자료를 받아 주는 다른 모델로 `extra add`를 새로 하는 것과, 지금 쓸 수 있는 서비스로는 그 숏을 만들 수 없다고 사용자에게 알리는 것 둘뿐이다. 입력을 위장해(얼굴이나 로고를 잘라 내거나 내용을 속이는 프롬프트로) 다시 보내지 않는다.
 
 ### 6. 맞춤
 
@@ -295,7 +300,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   ```powershell
   & $cr jobs add $p --unit u01 --batch draft-1 --quality draft
   ```
-- 모델이 숏을 거부하거나 같은 원인으로 거듭 실패하면 `plan unit`으로 그 단위를 다른 모델로 옮기고(4단계) `jobs add`로 새 작업을 만든다. 서비스의 안전 필터나 권리 필터가 숏을 거부하면 입력을 위장해 통과시키지 않는다. 로고나 얼굴을 잘라 내 필터를 피하는 것, 내용을 속이는 프롬프트도 위장이다. 할 수 있는 것은 그 자료를 받아 주는 다른 모델로 옮기는 것과, 지금 쓸 수 있는 서비스로는 그 숏을 만들 수 없다고 사용자에게 알리는 것 둘뿐이다.
+- 모델이 숏을 거부하거나 같은 원인으로 거듭 실패하면 `plan unit`으로 그 단위를 다른 모델로 옮기고(4단계) `jobs add`로 새 작업을 만든다. 서비스의 안전 필터나 권리 필터가 숏을 거부하면 입력을 위장해 통과시키지 않는다. 로고나 얼굴을 잘라 내 필터를 피하는 것, 내용을 속이는 프롬프트도 위장이다. 할 수 있는 것은 그 자료를 받아 주는 다른 모델로 옮기는 것(원본에 없는 숏이면 다른 모델로 `extra add`를 새로 한다)과, 지금 쓸 수 있는 서비스로는 그 숏을 만들 수 없다고 사용자에게 알리는 것 둘뿐이다.
 - 교체 이미지는 프로젝트 도중에도 고칠 수 있고, 이미 고른 테이크는 잃지 않는다. `casting.json`의 `swaps[].images`를 고치거나 `assets use`로 새 이미지를 등록하고, `cast check`를 통과시킨 뒤, 그 요소가 나오는 단위마다 `plan unit`을 실행한다(`plan check`가 바뀐 단위를 알려 준다). 그다음 그 단위에 `jobs add`로 새 작업을 더한다. `plan build --replace`는 모든 단위에 새 id를 주어 이미 만든 테이크를 쓸 수 없게 하므로 계획 전체를 다시 짤 때만 쓴다.
 
   ```powershell
@@ -355,7 +360,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
    ```powershell
    & $cr sound add $p --kind ambience --label "stone hall" --prompt "Quiet stone hall ambience, distant wind, faint dripping water, large reverberant space." --model audio_model_x --seconds 12 --batch sound-1 --shot 1 --gain-db -12
-   & $cr sound add $p --kind sfx --label "door slam" --prompt "Heavy wooden door slams shut in a stone hallway, short echo." --model audio_model_x --seconds 3 --batch sound-1 --shot 3 --offset-frames 2
+   & $cr sound add $p --kind sfx --label "door slam" --prompt "Heavy wooden door slams shut in a stone hallway, short echo, no music, no voice." --model audio_model_x --seconds 3 --batch sound-1 --shot 3 --offset-frames 2
    & $cr sound add $p --kind music --label "main theme" --prompt "Slow orchestral underscore, low strings and soft French horn, rising tension, no percussion." --model audio_model_x --seconds 30 --batch sound-1 --gain-db -8 --fade-in 2 --fade-out 3
    & $cr sound list $p
    ```
@@ -370,7 +375,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
    ```powershell
    & $cr sound done $p --sound s0001 --provider-id 4d2c8a10-6e3b-4f1a-9c7d-2b5e8f0a1c3d --credits 4 --file "$p\downloads\s0001.wav"
    ```
-7. 믹스하고 다시 조립한다. `sound mix`는 끝났고 끄지 않은 소리를 제자리에 놓아 더하고, 음량을 -16 LUFS로 맞추고, 최고 레벨을 -1 dBFS 아래로 누른 `out/soundtrack.wav`를 만든다. 믹스에 원본의 소리가 들어 있으면(영화 전체나 2초 구간 하나에서 상관 0.5 이상) 거부하고, 그 원인인 소리 항목을 알려 주며, 새 사운드트랙을 쓰지 않고 이전 사운드트랙도 지운다. `sound mix`가 어떤 이유로든 거부되면 이전 사운드트랙은 남지 않는다. `assemble`은 그 사운드트랙을 넣기 전에 한 번 더 원본의 소리와 견준다.
+7. 믹스하고 다시 조립한다. `sound mix`는 끝났고 끄지 않은 소리를 제자리에 놓아 더하고, 음량을 -16 LUFS로 맞추고, 최고 레벨을 -1 dBFS 아래로 누른 `out/soundtrack.wav`를 만든다. 믹스가 원본의 소리를 복사한 것만큼 원본의 소리와 비슷하면(영화 전체나 2초 구간 하나에서 상관 0.5 이상) 거부하고, 그 원인인 소리 항목을 알려 주며(무엇을 할지는 아래 "멈추고 사용자에게 알릴 때"), 새 사운드트랙을 쓰지 않고 이전 사운드트랙도 지운다. `sound mix`가 어떤 이유로든 거부되면 이전 사운드트랙은 남지 않는다. `assemble`은 그 사운드트랙을 넣기 전에 한 번 더 원본의 소리와 견준다.
 
    ```powershell
    & $cr sound mix $p
@@ -462,15 +467,28 @@ Keep this shot exactly as it is in the source video: the same people, place, cam
 
 같은 원인으로 거듭 실패하면 같은 설정을 되풀이하지 말고, 방법(`edit`와 `regen`)이나 모델을 바꿀지 사용자와 상의한다. 바꾸기로 하면 `plan unit`으로 그 단위만 바꾼다. 합격 기준(`project.json`의 `thresholds`)은 테이크를 통과시키려고 고치지 않는다. 기준을 바꾸는 것은 사용자의 결정이다.
 
+### 실전에서 확인한 것
+
+유료 모델로 한 첫 실제 작업에서 배운 것이다.
+
+- **새 참조 이미지나 새 프롬프트 방향은 초안 테이크 하나로 먼저 시험한다.** 초안(`--quality draft`) 하나를 만들어 사용자에게 보여 주고, 사용자가 받아들인 뒤에만 본 생성(`--quality final`) 작업을 낸다. 시험하지 않은 참조 이미지로 본 생성 테이크 다섯 개를 보냈다가 153크레딧이 모두 버려졌고, 초안으로 시험했으면 39크레딧이었다.
+- **방향을 바꾸는 재생성 전에는 고른 테이크가 있는지 묻는다.** 다른 구도로 바꾸거나 두 테이크를 "합치는" 재생성을 하기 전에, 사용자가 그 숏의 테이크를 이미 골랐는지 한 번 묻는다. 기준은 사용자의 눈이지 에이전트가 읽어 낸 비율이 아니다.
+- **사용자가 건넨 파일은 작업 id나 해시로 테이크에 짝짓는다.** 사용자는 서비스 사이트에서 직접 고르고 내려받은 파일이나 폴더를 건네는 일이 많다. 파일 이름에 든 Higgsfield 작업 id(테이크의 `meta.json`의 `provider_id`)로, 이름이 바뀌었으면 내용의 SHA-256(`Get-FileHash`로 잰 값이 테이크의 `raw` 파일과 같은지)으로 테이크를 찾아 `takes select`와 `takes confirm`으로 기록하고(맞추지 않은 테이크면 먼저 `conform`), 단위와 테이크 id를 사용자에게 다시 말하게 하지 않는다.
+- **배경 교체 이미지는 그 배경만 보이는 숏에만 준다.** 모델은 배경 이미지를 받은 그대로 통째로 붙여 넣기 때문이다. 그런 숏만 `shots`에 적은 배경 요소에 교체 이미지를 준다. 인물이나 크리처 뒤로 그 배경이 보이는 숏은 교체 이미지가 없는 다른 배경 요소로 적고 단위의 프롬프트에 새 배경의 빛과 색을 글로 적어 바꾼다(교체표로는 교체가 아니므로 `qc`가 `color`를 빼 주지 않는다. 떨어지면 "retry 원인 판단"의 `qc_skip`).
+- **화면에 하나만 나와야 하는 것에는 한 방향만 담은 참조 이미지를 준다.** 크리처 하나를 두 방향으로 담은 시트를 주자 크리처가 둘 나왔다. 여러 방향을 담은 시트(3단계)에서 이런 일이 생기면 그 요소의 교체 이미지를 한 방향 이미지로 바꾸고(`swaps[].images`, `plan unit`), 테이크마다 그 수부터 확인한다.
+- **사용자가 마음에 들어 한 모습은 그 프레임을 참조로 삼는다.** 다시 생성해서 같은 모습이 우연히 또 나오기를 바라지 않는다. 그 테이크의 프레임을 뽑아(workflow.md의 "테이크 한 프레임을 참조 이미지로") 그 요소의 `swaps[].images`에 더하고, `cast check`와 `plan unit`을 거쳐 다음 테이크부터 입력으로 쓴다.
+- **음악의 타이밍은 돌려받은 곡에서 잰다.** 음악 모델은 프롬프트의 타이밍 지시(몇 초에 터지라는 말)를 지키지 않는다. 돌려받은 곡의 음량 변화를 재서(workflow.md의 "소리의 음량 변화") 크게 터지는 시각을 찾고, 그 시각이 원하는 프레임에 오도록 `sound set --at-frame`을 정하거나 맞는 곡을 고른다.
+- **효과음 프롬프트는 소리 하나를 한 문장으로 쓰고 음악과 목소리를 막는다**(`no music, no voice`). 효과음 하나는 시작 프레임 하나에 놓이므로 소리가 여럿 섞이면 제자리에 놓을 수 없고, 음악이나 목소리가 섞이면 효과음으로 쓸 수 없다.
+
 ## 멈추고 사용자에게 알릴 때
 
 - Higgsfield 연결이 없다(규칙 10).
 - 명령이 종료 코드 1로 끝났다. 도구의 결함이다.
-- `jobs next`, `assets next`, `sound next`가 한도 초과로 거부했고 예산 안에서 묶음 한도를 더할 수 없다. 또는 `approve`가 프로젝트 예산을 넘는다고 거부했다. 사용자의 새 승인 없이는 더 가지 않는다.
-- `sound mix`나 `assemble`이 원본의 소리가 들어 있다고 거부했다. 원본의 소리가 소리 항목이나 `--audio` 파일로 들어온 것이다. 거부 메시지가 원인인 소리 항목(`sound(s) s0003 ...`)을 알려 주므로, 그 소리를 사용자에게 알리고 그 항목을 끈다(`sound set --mute`).
+- `jobs next`, `assets next`, `sound next`, `extra next`가 한도 초과로 거부했고 예산 안에서 묶음 한도를 더할 수 없다. 또는 `approve`가 프로젝트 예산을 넘는다고 거부했다. 사용자의 새 승인 없이는 더 가지 않는다.
+- `sound mix`나 `assemble`이 원본의 소리와 비슷하다고 거부했다. 메시지에 적힌 소리(`sound(s) s0003 ...`)나 `--audio` 파일이 원본의 소리를 복사한 것만큼 원본의 소리와 비슷하다는 뜻이다. 원본의 소리가 들어온 것일 수도 있고, 원본과 같은 높이의 음을 길게 끄는 소리(같은 음의 드론이나 패드)일 수도 있다. 에이전트는 들을 수 없어 둘을 가리지 못하므로 그 소리를 사용자에게 들어 보게 한다. 원본의 소리면 그 항목을 끄고(`sound set --mute`), 아니면 다른 조(key)로 그 곡을 `sound add`로 다시 만들고 이 항목을 끈다.
 - 명령이 `ledger line N is invalid`로 멈춘다. 장부가 손상된 것이다. 생성을 멈추고 `audit`으로 문제 줄을 확인해 사용자에게 보고한다. `ledger.jsonl`은 직접 고치지 않는다.
-- 생성 호출이 시간 초과로 끊겨 결과를 모른다. 다시 제출하지 말고 먼저 조회한다(generation-jobs.md).
-- 권리 답 때문에 `cast check`나 `assets` 명령이 거부한다.
+- 생성 호출이 시간 초과나 제출 호출의 오류(HTTP 5xx, 게이트웨이나 연결 오류)로 끝나 결과를 모른다. 실패로 기록하거나 다시 제출하지 말고 먼저 조회한다(generation-jobs.md).
+- 권리 답 때문에 `cast check`, `assets` 명령, `extra` 명령이 거부한다.
 - 서비스의 안전 필터나 권리 필터가 숏을 거부했고, 그 자료를 받아 주는 다른 모델이 없다.
 - `audit`의 내용과 Higgsfield 사용 내역이 맞지 않는다. 숨기지 않고 그대로 보고한다.
 
