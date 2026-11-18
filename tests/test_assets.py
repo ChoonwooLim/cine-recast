@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLE_MODEL, IMAGE_MODEL, generate_and_use, png, run_cli
+from conftest import CAST_ELEMENTS, EXAMPLE_MODEL, IMAGE_MODEL, generate_and_use, png, run_cli
 
 from cine_recast.assets import (add, generated_files, issue_next, list_assets, record_done, record_fail,
                                 ref_free_files, set_cost, use)
@@ -14,6 +14,7 @@ from cine_recast.ledger import approve, audit, job_states
 from cine_recast.plan import check as check_plan
 from cine_recast.plan import check_models
 from cine_recast.plan import set_cost as set_job_cost
+from cine_recast.project import set_right
 
 PROMPT = "Full-body portrait of a young adult with short black hair, neutral studio light."
 
@@ -182,7 +183,9 @@ def test_a_unit_on_an_image_model_is_refused(planned3):
 
 
 def test_clearing_refs_afterwards_does_not_make_a_virtual_person(assets3, tmp_path):
+    set_right(assets3.root, "likeness_consent", "yes")                          # refs need consent to be generated
     image = generate_and_use(assets3.root, "hero", tmp_path, refs=[png(tmp_path / "ref.png")])
+    set_right(assets3.root, "likeness_consent", "not_applicable")
     assert generated_files(assets3.root, "hero") == [image] and ref_free_files(assets3.root, "hero") == []
     data = read_json(assets3.assets_file); data["assets"][0]["refs"] = []; write_json(assets3.assets_file, data)
     assert ref_free_files(assets3.root, "hero") == []                           # the quote binds what was sent
@@ -203,6 +206,64 @@ def test_a_done_written_by_hand_does_not_count_as_generated(assets3):
     c["swaps"] = [{"element": "hero", "images": ["assets/hero/a0001_1.png"], "note": ""}]
     write_json(assets3.casting_file, c)
     assert any("likeness_consent" in p for p in check(root))
+
+
+# --- final-review wave: an asset with reference images reads the rights answers ---
+
+def test_person_asset_with_refs_needs_consent_at_add(assets3, tmp_path, capsys):
+    root = assets3.root
+    set_right(root, "likeness_consent", "no")
+    photo = png(tmp_path / "real_person.png")
+    capsys.readouterr()
+    assert main(["assets", "add", str(root), "--element", "hero", "--prompt", PROMPT, "--model", "image_model_x",
+                 "--batch", "a1", "--ref", str(photo)]) == 2
+    err = capsys.readouterr().err
+    assert "likeness_consent" in err and "rights set" in err
+    assert not assets3.assets_file.exists()
+
+
+def test_consent_withdrawn_after_add_stops_quote_and_issue(assets3, tmp_path):
+    root = assets3.root
+    set_right(root, "likeness_consent", "yes")
+    add(root, element="hero", prompt=PROMPT, model="image_model_x", batch="a1", refs=[png(tmp_path / "ref.png")])
+    set_cost(root, "a0001", 6.0); approve(root, "a1", 10.0, "owner")
+    set_right(root, "likeness_consent", "no")
+    before = assets3.ledger_file.read_text(encoding="utf-8")
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        set_cost(root, "a0001", 6.0)
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        issue_next(root, "a1")
+    assert assets3.ledger_file.read_text(encoding="utf-8") == before
+    assert list_assets(root)[0]["state"] == "quoted"
+
+
+def test_person_asset_without_refs_is_unaffected(assets3):
+    set_right(assets3.root, "likeness_consent", "no")
+    add(assets3.root, element="hero", prompt=PROMPT, model="image_model_x", batch="a1")
+    set_cost(assets3.root, "a0001", 6.0); approve(assets3.root, "a1", 10.0, "owner")
+    assert [j["job_id"] for j in issue_next(assets3.root, "a1")] == ["a0001"]
+
+
+def test_kind_is_read_from_casting_at_that_moment(assets3, tmp_path):
+    root = assets3.root
+    ref = png(tmp_path / "ref.png")
+    add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
+        refs=[ref])                                              # a background with refs: background_rights "yes"
+    c = read_json(assets3.casting_file); c["elements"][1]["kind"] = "person"; write_json(assets3.casting_file, c)
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        set_cost(root, "a0001", 6.0)                             # likeness_consent is "not_applicable"
+
+
+def test_background_asset_with_refs_needs_background_rights(analyzed3, tmp_path):
+    root = analyzed3.root
+    write_json(analyzed3.casting_file, {"elements": CAST_ELEMENTS, "swaps": []})
+    write_json(analyzed3.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL]})
+    with pytest.raises(CineRecastError, match="background_rights"):
+        add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
+            refs=[png(tmp_path / "ref.png")])
+    set_right(root, "background_rights", "unknown")              # answered, as for a background swap
+    assert add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
+               refs=[png(tmp_path / "ref.png")])["id"] == "a0001"
 
 
 def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):

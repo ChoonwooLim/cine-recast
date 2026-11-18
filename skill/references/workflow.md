@@ -70,7 +70,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--item`: `reference_rights`, `likeness_consent`, `background_rights`.
 - `--answer`: `yes`, `no`, `unknown`, `not_applicable`.
 - 출력: `likeness_consent: yes`.
-- 이 답은 `cast check`, `plan build`, `jobs next`가 실행될 때마다 다시 읽힌다. 승인 뒤에 답이 바뀌어 검사를 통과하지 못하면 작업이 나가지 않는다.
+- 이 답은 `cast check`, `plan build`, `jobs next`, 그리고 참조 이미지가 있는 자료의 `assets add`, `assets set-cost`, `assets next`가 실행될 때마다 다시 읽힌다. 승인 뒤에 답이 바뀌어 검사를 통과하지 못하면 작업이 나가지 않는다.
 
 ### analyze
 
@@ -145,8 +145,9 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--count`: 한 번에 받을 후보 수, 1에서 4. 기본 1.
 - `--aspect-ratio`: 모델이 제공하는 `W:H`. 생략하면 배경은 화면 영역에 가장 가까운 비율, 그 밖의 요소는 모델의 첫 비율.
 - `--ref`: 참조 이미지. 여러 번 쓸 수 있고, 상대 경로는 프로젝트 폴더 기준이다. 인물에 `--ref`를 쓰면 그 결과는 가상 인물이 아니다.
+- 참조 이미지가 있으면 권리 답을 읽는다. 요소의 종류는 자료를 만들 때 적힌 값이 아니라 그 순간의 `casting.json`에서 읽는다. 인물이면 `likeness_consent`가 `yes`여야 하고, 배경이면 `background_rights`에 답이 있어야 한다(배경 교체와 같은 규칙). `assets set-cost`와 `assets next`도 같은 검사를 다시 한다.
 - 쓰는 것: `assets.json`. 출력: 자료 id(`a0001`).
-- 거부: 요소가 없다. 프롬프트가 영어가 아니다. 모델이 이미지 모델이 아니다. 장수나 비율이 모델 범위 밖이다. 참조 이미지가 없거나 모델이 받는 수(`image_refs`)보다 많다.
+- 거부: 요소가 없다. 프롬프트가 영어가 아니다. 모델이 이미지 모델이 아니다. 장수나 비율이 모델 범위 밖이다. 참조 이미지가 없거나 모델이 받는 수(`image_refs`)보다 많다. 참조 이미지가 있는데 위의 권리 답이 없다(실행할 `rights set` 명령이 함께 나온다).
 
 ### assets list
 
@@ -180,7 +181,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: JSON 목록. 항목마다 `job_id`(자료 id), `element`, `tool`(`generate_image`), `params`, `medias`(참조 이미지의 절대 경로, 역할은 `image`). 내보낼 것이 없으면 `[]`.
 - 한 번 내보낸 자료는 다시 나오지 않는다.
-- 거부(종료 코드 2): 묶음에 승인 기록이 없다. 견적을 더하면 한도를 넘는다. 견적 뒤에 `params`나 참조 이미지가 바뀌었다. 장부가 거부하기 전에 내보낸 자료가 있으면 그 목록은 그대로 출력된다.
+- 거부(종료 코드 2): 묶음에 승인 기록이 없다. 견적을 더하면 한도를 넘는다. 견적 뒤에 `params`나 참조 이미지가 바뀌었다. `assets add`의 검사를 통과하지 못한다(참조 이미지가 있는 인물 자료인데 그사이 `likeness_consent`가 `yes`가 아니게 된 경우 포함). 장부가 거부하기 전에 내보낸 자료가 있으면 그 목록은 그대로 출력된다.
 
 ### assets done
 
@@ -247,6 +248,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: `plan ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
 - 검사하는 것: 단위의 프롬프트가 비어 있지 않은 영어인지, 입력 파일이 있는지, 길이와 화면비와 해상도가 모델 범위 안인지, 견적 뒤에 `params`나 입력이 바뀌지 않았는지.
+- 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan build --replace`로 계획을 다시 만들라는 문제가 나온다. 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
+- 모델: 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
 
 ### plan show
 
@@ -469,7 +472,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적는다. 넣기 전에 사용자에게 알린다 |
 | `units[].params.duration` | 모델이 정해진 길이만 받을 때. 단위 길이보다 짧지 않은 허용 값으로 고친다. 견적 전에 고치고, 견적 뒤에 고쳤으면 다시 견적을 기록한다 |
 
-작업 목록, `state`, `est_credits`, `inputs`, `selected_take`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다.
+작업 목록, `state`, `est_credits`, `inputs`, `selected_take`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
 
 ### 점수 읽기
 

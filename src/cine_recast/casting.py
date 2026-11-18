@@ -52,7 +52,8 @@ def _strings(value, where: str):
             yield from _strings(item, f"{where}[{index}]")
 
 
-def _answer(rights: dict, item: str) -> str | None:
+def answer(rights: dict, item: str) -> str | None:
+    """The recorded answer of one rights item of project.json's rights, or None when unanswered."""
     entry = rights.get(item)
     return entry.get("answer") if isinstance(entry, dict) else None
 
@@ -172,7 +173,7 @@ def check(root: Path) -> list[str]:
             elif not (root / path).is_file():  # a relative path is relative to the project folder
                 problems.append(f"{label}: image file not found: {image}")
 
-    consent = _answer(rights, "likeness_consent")
+    consent = answer(rights,"likeness_consent")
     if "person" in swapped_kinds and consent == "not_applicable":
         problem = _virtual_person_problem(root, person_images)
         if problem:
@@ -180,10 +181,10 @@ def check(root: Path) -> list[str]:
     elif "person" in swapped_kinds and consent != "yes":
         problems.append("A person is replaced but likeness_consent is not answered 'yes'; "
                         "record it with: rights set --item likeness_consent --answer yes")
-    if "background" in swapped_kinds and _answer(rights, "background_rights") is None:
+    if "background" in swapped_kinds and answer(rights,"background_rights") is None:
         problems.append("A background is replaced but background_rights is not answered; "
                         "record it with: rights set --item background_rights")
-    if _answer(rights, "reference_rights") is None:
+    if answer(rights,"reference_rights") is None:
         problems.append("reference_rights is not answered; "
                         "record it with: rights set --item reference_rights")
     return problems

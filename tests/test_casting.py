@@ -87,7 +87,9 @@ def test_a_person_generated_from_reference_images_needs_likeness_consent(assets3
     ref = png(tmp_path / "ref.png")
     generate_and_use(assets3.root, "sky_battle", tmp_path, refs=[ref])  # refs stay fine for a background
     assert check(assets3.root) == []
+    set_right(assets3.root, "likeness_consent", "yes")                  # the asset itself needs consent
     generate_and_use(assets3.root, "hero", tmp_path, refs=[ref])
+    set_right(assets3.root, "likeness_consent", "not_applicable")       # answer changed afterwards
     assert any("likeness_consent" in p and "reference images" in p for p in check(assets3.root))
     set_right(assets3.root, "likeness_consent", "yes")
     assert check(assets3.root) == []

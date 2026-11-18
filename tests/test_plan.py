@@ -430,7 +430,6 @@ def _edit_unit(pp, mutate, index=0):
 @pytest.mark.parametrize("mutate", [
     lambda u: u["params"].update(duration=15),                          # still within the model limits
     lambda u: u["params"].update(aspect_ratio="21:9"),
-    lambda u: u["inputs"].append(dict(u["inputs"][1])),                 # one more input image
 ])
 def test_quote_is_bound_to_the_priced_payload(planned3, mutate):
     root = planned3.root
@@ -568,13 +567,93 @@ def test_flow_in_a_folder_with_hangul_and_a_space(_cast3_template, tmp_path, cli
     assert (root / "takes" / "u01" / "t001" / "raw.mp4").is_file() and audit(root)["ok"] is True
 
 
+def test_issue_loop_refuses_a_stale_quote_on_its_own_inputs(planned3, monkeypatch):
+    import cine_recast.plan as plan_module
+
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    _edit_unit(planned3, lambda u: u["inputs"].append(dict(u["inputs"][1])))   # one more input image
+    monkeypatch.setattr(plan_module, "check", lambda r, **kw: [])      # the quote binds the inputs too
+    with pytest.raises(CineRecastError, match="set-cost"):
+        issue_next(root, "b")
+    assert batch_status(root, "b")["committed"] == 0.0
+
+
+# --- final-review wave: the inputs sent are the inputs the swap table implies ---
+
+def _without_person_swap(pp):
+    casting = read_json(pp.casting_file)
+    casting["swaps"] = [s for s in casting["swaps"] if s["element"] != "hero"]
+    write_json(pp.casting_file, casting)
+
+
+def test_withdrawn_person_swap_stops_a_plan_built_before(planned3, capsys):
+    root = planned3.root                                   # built with the hero photo and consent "yes"
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    _without_person_swap(planned3)
+    set_right(root, "likeness_consent", "no")              # consent withdrawn, the plan is not rebuilt
+    before = planned3.ledger_file.read_text(encoding="utf-8")
+    assert any("u01" in p and "plan build --replace" in p for p in check(root))
+    capsys.readouterr()
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 2
+    out = capsys.readouterr()
+    assert json.loads(out.out or "[]") == [] and "plan build --replace" in out.err
+    assert planned3.ledger_file.read_text(encoding="utf-8") == before
+    assert load(root)["jobs"][0]["state"] == "quoted"
+
+
+def test_inputs_added_by_hand_are_refused(cast3, tmp_path, capsys):
+    root = cast3.root
+    _without_person_swap(cast3)
+    set_right(root, "likeness_consent", "no")
+    write_models(root, image_refs=1)
+    build(root, model="seedance_2_5", method="edit", batch="b")
+    set_prompt(root, "u01", GOOD_PROMPT)
+    photo = (tmp_path / "someone.png")
+    shutil.copyfile(read_json(cast3.casting_file)["swaps"][0]["images"][0], photo)
+    _edit_unit(cast3, lambda u: u["inputs"].extend([{"role": "image", "path": photo.as_posix(), "element": "hero"},
+                                                    {"role": "image", "path": photo.as_posix()}]))
+    problems = check(root)
+    assert any("u01" in p and "plan build --replace" in p for p in problems)
+    assert any("u01" in p and "image_refs" in p for p in problems)
+    assert main(["plan", "check", str(root)]) == 2
+    assert main(["jobs", "set-cost", str(root), "--job", "j0001", "--credits", "40"]) == 0
+    assert main(["approve", str(root), "--batch", "b", "--limit", "50", "--by", "owner"]) == 0
+    before = cast3.ledger_file.read_text(encoding="utf-8")
+    capsys.readouterr()
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 2
+    assert json.loads(capsys.readouterr().out or "[]") == []
+    assert cast3.ledger_file.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("mutate, fragment", [
+    (lambda u: u.update(method="regen"), "plan build --replace"),          # the lead input follows the method
+    (lambda u: u["inputs"].reverse(), "plan build --replace"),              # order matters
+    (lambda u: u["inputs"][1].update(element="sky_battle"), "plan build --replace"),
+    (lambda u: u["inputs"].pop(), "plan build --replace"),
+    (lambda u: u.update(method="paint"), "method"),
+])
+def test_stored_inputs_must_match_the_derived_inputs(planned3, mutate, fragment):
+    _edit_unit(planned3, mutate)
+    assert any("u01" in p and fragment in p for p in check(planned3.root))
+
+
+@pytest.mark.parametrize("change, fragment", [
+    ({"image_refs": 1}, "image_refs"),
+    ({"video_ref": False}, "video_ref"),
+])
+def test_check_reads_the_model_limits_as_they_are_now(planned3, change, fragment):
+    write_models(planned3.root, **change)
+    assert any("u01" in p and fragment in p for p in check(planned3.root))
+
+
 def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
     import cine_recast.plan as plan_module
 
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
     _edit_unit(planned3, lambda u: u["params"].update(duration=15))
-    monkeypatch.setattr(plan_module, "check", lambda r: [])            # the gate holds even without check
+    monkeypatch.setattr(plan_module, "check", lambda r, **kw: [])      # the gate holds even without check
     with pytest.raises(CineRecastError, match="set-cost") as refused:
         issue_next(root, "b")
     assert refused.value.issued == [] and batch_status(root, "b")["committed"] == 0.0

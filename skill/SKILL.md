@@ -145,7 +145,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr assets use $p --element hero --image assets/hero/a0001_2.png
 ```
 
-`--ref` 없이 글 설명만으로 만든 인물만 가상 인물이며, 이때만 `likeness_consent`가 `not_applicable`이어도 통과한다. 참조 사진을 넣어 만든 인물과 밖에서 가져온 사진은 `yes`가 필요하다. 사진 속 사람의 초상이 결과에 옮겨 오기 때문이다.
+`--ref` 없이 글 설명만으로 만든 인물만 가상 인물이며, 이때만 `likeness_consent`가 `not_applicable`이어도 통과한다. 참조 사진을 넣어 만든 인물과 밖에서 가져온 사진은 `yes`가 필요하다. 사진 속 사람의 초상이 결과에 옮겨 오기 때문이다. 그래서 인물 자료에 `--ref`를 주려면 먼저 `likeness_consent`가 `yes`여야 하고, 배경 자료에 `--ref`를 주려면 `background_rights`에 답이 있어야 한다. 도구는 `assets add`, `assets set-cost`, `assets next`에서 그 순간의 요소 종류와 권리 답을 읽어 확인하고, 맞지 않으면 실행할 `rights set` 명령과 함께 거부한다.
 
 ```powershell
 & $cr cast check $p
@@ -315,7 +315,7 @@ Replace the teenage boy riding the dragon with the woman shown in the first refe
 - `jobs next`나 `assets next`가 한도 초과로 거부했다. 추가 승인 없이는 더 가지 않는다.
 - 명령이 `ledger line N is invalid`로 멈춘다. 장부가 손상된 것이다. 생성을 멈추고 `audit`으로 문제 줄을 확인해 사용자에게 보고한다. `ledger.jsonl`은 직접 고치지 않는다.
 - 생성 호출이 시간 초과로 끊겨 결과를 모른다. 다시 제출하지 말고 먼저 조회한다(generation-jobs.md).
-- 권리 답 때문에 `cast check`가 거부한다.
+- 권리 답 때문에 `cast check`나 `assets` 명령이 거부한다.
 - `audit`의 내용과 Higgsfield 사용 내역이 맞지 않는다. 숨기지 않고 그대로 보고한다.
 
 ## 참고 문서

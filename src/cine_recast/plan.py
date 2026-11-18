@@ -263,6 +263,26 @@ def _archive(root: Path, data: dict) -> Path:
 
 # --- build ---------------------------------------------------------------------------------
 
+def _unit_inputs(root: Path, unit_id: str, method: str, shots: list[int]) -> list[dict]:
+    """The inputs a unit is sent with, derived from the project as it is now.
+
+    First the lead input by method (edit: the unit's reference clip, role "video"; regen: the first
+    still of the unit's first shot, role "image"), then the swap images of the elements that appear
+    in its shots, in element order (casting.swaps_for_shots). plan build stores this list in the
+    unit, and check refuses a unit whose stored inputs differ from it.
+    """
+    pp = ProjectPaths(Path(root))
+    if method == "edit":
+        lead = {"role": "video", "path": (pp.unit_dir(unit_id) / "ref.mp4").relative_to(pp.root).as_posix()}
+    else:
+        still = pp.shot_dir(shots[0]) / "stills" / "first.png"
+        lead = {"role": "image", "path": still.relative_to(pp.root).as_posix()}
+    inputs = [lead]
+    for swap in casting.swaps_for_shots(root, shots):
+        inputs += [{"role": "image", "path": image, "element": swap["element"]} for image in swap["images"]]
+    return inputs
+
+
 def build(root: Path, *, model: str, method: str, batch: str, quality: str = "draft",
           max_unit_seconds: float | None = None, replace: bool = False) -> dict:
     """Pack the shots into units, write each unit's reference clip and plan.json with one
@@ -333,14 +353,7 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         uid = f"u{number:02d}"
         start, end = group[0].start, group[-1].end
         shots = [shot.index for shot in group]
-        if method == "edit":    # the unit's reference clip, written below
-            lead = {"role": "video", "path": (pp.unit_dir(uid) / "ref.mp4").relative_to(root).as_posix()}
-        else:                   # the first still of the unit's first shot
-            still = pp.shot_dir(group[0].index) / "stills" / "first.png"
-            lead = {"role": "image", "path": still.relative_to(root).as_posix()}
-        inputs = [lead]
-        for swap in casting.swaps_for_shots(root, shots):
-            inputs += [{"role": "image", "path": image, "element": swap["element"]} for image in swap["images"]]
+        inputs = _unit_inputs(root, uid, method, shots)   # the edit lead, the unit's reference clip, is written below
         images = sum(1 for item in inputs if item["role"] == "image")
         if images > spec["image_refs"]:
             raise CineRecastError(
@@ -400,12 +413,28 @@ def _payload(root: Path, data: dict, models: dict[str, dict], job: dict) -> dict
 
 # --- check ---------------------------------------------------------------------------------
 
+def _casting_problems(root: Path) -> list[str]:
+    """casting.check, with a casting.json that cannot be read reported as a problem instead of raised."""
+    try:
+        return casting.check(root)
+    except CineRecastError as exc:
+        return [exc.message]
+
+
 def check(root: Path) -> list[str]:
-    """Problems that keep the plan's jobs from being issued. An empty list means it is ready."""
+    """Problems that keep the plan's jobs from being issued. An empty list means it is ready.
+
+    Each unit's stored inputs must be the inputs _unit_inputs derives from the swap table and the
+    method now, and fit the model's image_refs and video_ref as models.json gives them now.
+    """
     root = Path(root)
     data = load(root)
     problems = check_models(root)
     models = {} if problems else _models_by_id(root)
+    cast_problems = _casting_problems(root)
+    if cast_problems:
+        problems.append("casting is not ready, so the unit inputs cannot be compared with the swap table: "
+                        + "; ".join(cast_problems))
     for position, item in enumerate(data["units"]):
         if not isinstance(item, dict):
             problems.append(f"units[{position}] must be an object.")
@@ -414,6 +443,9 @@ def check(root: Path) -> list[str]:
         prompt = item.get("prompt")
         if not isinstance(prompt, str) or not is_english_prompt(prompt):
             problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
+        method, shots = item.get("method"), item.get("shots")
+        if method not in METHODS:
+            problems.append(f"{label}: method must be one of {', '.join(METHODS)}, not {method!r}.")
         inputs = item.get("inputs")
         if not isinstance(inputs, list) or not inputs:
             problems.append(f"{label}: inputs must be a non-empty list.")
@@ -428,6 +460,15 @@ def check(root: Path) -> list[str]:
                                     f"not {entry.get('role')!r}.")
                 if not resolve(root, path).is_file():
                     problems.append(f"{label}: input file not found: {path}")
+            derivable = (not cast_problems and method in METHODS and is_text(item.get("id"))
+                         and isinstance(shots, list) and bool(shots)
+                         and all(isinstance(s, int) and not isinstance(s, bool) for s in shots))
+            if derivable:
+                expected = _unit_inputs(root, item["id"], method, shots)
+                if inputs != expected:
+                    problems.append(f"{label}: its inputs are not the inputs the swap table and method {method!r} "
+                                    f"give now ({', '.join(e['path'] for e in expected)}); rebuild the plan "
+                                    "with plan build --replace")
         if not models:
             continue  # models.json problems are already listed
         spec = models.get(item.get("model"))
@@ -437,6 +478,14 @@ def check(root: Path) -> list[str]:
         if spec["kind"] != "video":
             problems.append(f"{label}: model {spec['id']!r} has kind {spec['kind']!r}; units need a video model.")
             continue
+        if isinstance(inputs, list):
+            images = sum(1 for entry in inputs if isinstance(entry, dict) and entry.get("role") == "image")
+            if images > spec["image_refs"]:
+                problems.append(f"{label}: {images} input images, but model {spec['id']!r} takes at most "
+                                f"{spec['image_refs']} (image_refs).")
+        if method == "edit" and not spec["video_ref"]:
+            problems.append(f"{label}: method 'edit' sends a reference video, but model {spec['id']!r} has "
+                            "video_ref false; rebuild the plan with method 'regen' or another model.")
         params = item.get("params") if isinstance(item.get("params"), dict) else {}
         duration, top = params.get("duration"), math.ceil(spec["max_seconds"])
         if not is_number(duration) or not (spec["min_seconds"] <= duration <= top):
