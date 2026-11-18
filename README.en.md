@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="CineRecast: same shots, new cast, new backdrop" width="100%">
+  <img src="docs/images/banner.jpg" alt="CineRecast: same shots, new cast, new backdrop" width="100%">
 </p>
 
 # CineRecast
@@ -13,8 +13,6 @@ Cut positions, shot lengths, aspect ratio, camera moves, framing and action stay
 > **Status: stage 1 implemented (0.1.0)**
 >
 > The core flow from analysis to assembly is implemented and passes its automated tests. A full recreation through a paid generation model has not been run yet. What is verified and what is not is written down plainly under [Status and roadmap](#status-and-roadmap).
-
-The diagrams on this page are labelled in Korean with English subtitles.
 
 ## Contents
 
@@ -34,7 +32,7 @@ The diagrams on this page are labelled in Korean with English subtitles.
 ## What it does
 
 <p align="center">
-  <img src="docs/images/concept.svg" alt="What stays and what changes between the reference and the recast" width="100%">
+  <img src="docs/images/concept.en.jpg" alt="What stays and what changes between the reference and the recast" width="100%">
 </p>
 
 | Stays the same | Changes |
@@ -68,7 +66,7 @@ CineRecast has two parts.
 And **the user** decides: the rights answers, what is swapped for what, how much may be spent, and whether the result is accepted.
 
 <p align="center">
-  <img src="docs/images/workflow.svg" alt="The workflow in eight steps and who performs each step" width="100%">
+  <img src="docs/images/workflow.en.jpg" alt="The workflow in eight steps and who performs each step" width="100%">
 </p>
 
 | Step | What happens | Who |
@@ -86,33 +84,37 @@ Shots that miss the thresholds are generated again within the approved limit.
 
 ## Example screens
 
-> The images below come from a real run of the tool on a **synthetic three-shot clip drawn from flat shapes** (90 frames, 640x360, 24 fps), made so that it can live in this repository. The "recast" side is not the output of a generation model: it is a stand-in clip with the same motion drawn in other colours. These images show what analysis, conforming and comparison look like; they are not an example of generation quality.
+> The scene images on this page were generated with a Higgsfield image model, and every person in them is fictional. The examples below come from a real run of the tool on a **three-shot clip** built from those stills with simple camera moves (132 frames, 1280x720, 24 fps, a 2.39:1 picture with black bars). The "recast" side is not the output of a video generation model: it is a stand-in clip built from stills with the person and the background swapped, with the same camera moves. These images show what analysis, conforming and comparison look like; they are not an example of video generation quality.
 
-**Cut review image.** For every cut the tool writes one strip of the four frames around it, each labelled with its frame number, so you can see that a new shot starts at frame 36.
+**Side by side.** Reference on the left, recast on the right. The cuts fall on the same frames, and in all three shots the person's position and size and the camera move are the same; only the look of the person and of the background differs. The tool writes this comparison as a video (`compare.mp4`). The black bars sit in the same place with the same thickness as in the reference.
 
 <p align="center">
-  <img src="docs/images/example-cut-review.png" alt="Cut review image: frames 34, 35, 36, 37" width="100%">
+  <img src="docs/images/example-compare.webp" alt="Side-by-side video: reference on the left, recast on the right" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/images/example-compare.jpg" alt="Side by side: reference on the left, recast on the right, three shots" width="100%">
+</p>
+
+**Cut review image.** For every cut the tool writes one strip of the four frames around it, each labelled with its frame number, so you can see that a new shot starts at frame 48.
+
+<p align="center">
+  <img src="docs/images/example-cut-review.jpg" alt="Cut review image: frames 46, 47, 48, 49" width="100%">
 </p>
 
 **Shot review image.** Eight evenly spaced frames of one shot, to see at a glance what happens in it.
 
 <p align="center">
-  <img src="docs/images/example-shot-strip.png" alt="Shot review image: eight evenly spaced frames of shot 1" width="100%">
-</p>
-
-**Side by side.** Reference on the left, recast on the right. In all three shots the figure's position and size and the camera move are the same; only the look of the figure and of the background differs. The tool writes this comparison as a video (`compare.mp4`).
-
-<p align="center">
-  <img src="docs/images/example-compare.png" alt="Side by side: reference on the left, recast on the right, three shots" width="80%">
+  <img src="docs/images/example-shot-strip.jpg" alt="Shot review image: eight evenly spaced frames of shot 1" width="100%">
 </p>
 
 **Report.** At the end the tool writes a report (`report.md`, in Korean). This is the per-shot table from the example above, with the column names translated.
 
 | Shot | Frames | Unit | Method | Take | Camera | Motion | Colour | Flicker ratio | Overlap with reference | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 0-36 | u01 | edit | t001 | 1.000 | 0.987 | 0.000 (left out) | 1.000 | 0.000 | pass |
-| 2 | 36-60 | u01 | edit | t001 | 1.000 | 0.634 | 0.000 (left out) | 1.000 | 0.000 | pass |
-| 3 | 60-90 | u01 | edit | t001 | 1.000 | 0.980 | 0.000 (left out) | 1.000 | 0.000 | pass |
+| 1 | 0-48 | u01 | edit | t001 | 1.000 | 0.991 | 0.000 (left out) | 1.968 | 0.000 | pass |
+| 2 | 48-84 | u01 | edit | t001 | 1.000 | 0.982 | 0.000 (left out) | 0.361 | 0.001 | pass |
+| 3 | 84-132 | u01 | edit | t001 | 1.000 | 0.997 | 0.000 (left out) | 0.619 | 0.000 | pass |
 
 | Batch | Limit | Used | Remaining |
 | --- | --- | --- | --- |
@@ -162,15 +164,15 @@ What the tool can recognise is the same file and material inside the project. It
 ### 4. Not one credit without approval
 
 <p align="center">
-  <img src="docs/images/ledger.svg" alt="The approval ledger: quote, approve, issue, run and record, audit" width="100%">
+  <img src="docs/images/ledger.en.jpg" alt="The approval ledger: quote, approve, issue, run and record, audit" width="100%">
 </p>
 
 Generation costs money. Every project has an append-only ledger (`ledger.jsonl`), and paid jobs are controlled through it.
 
 ```json
-{"type": "approval", "time": "2026-11-18T05:38:05Z", "batch": "draft-1", "limit_credits": 50.0, "by": "owner", "note": ""}
-{"type": "job_issued", "time": "2026-11-18T05:38:05Z", "job_id": "j0001", "batch": "draft-1", "est_credits": 40.0}
-{"type": "job_done", "time": "2026-11-18T05:38:06Z", "job_id": "j0001", "provider_id": "demo-0001", "credits": 38.0}
+{"type": "approval", "time": "2026-11-18T06:48:25Z", "batch": "draft-1", "limit_credits": 50.0, "by": "owner", "note": ""}
+{"type": "job_issued", "time": "2026-11-18T06:48:25Z", "job_id": "j0001", "batch": "draft-1", "est_credits": 40.0}
+{"type": "job_done", "time": "2026-11-18T06:48:26Z", "job_id": "j0001", "provider_id": "demo-0001", "credits": 38.0}
 ```
 
 - The agent first asks the price of every job, records it and shows the user a table.
@@ -290,13 +292,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 `analyze` prints a line like this:
 
 ```text
-shots: 3  cuts: [36, 60]  picture: {'x': 0, 'y': 0, 'w': 640, 'h': 360}
+shots: 3  cuts: [48, 84]  picture: {'x': 0, 'y': 92, 'w': 1280, 'h': 536}
 ```
 
 `cuts` are the frame numbers at which a new shot starts, and `picture` is the real picture area without the black bars. If the detected cuts or the picture area are wrong, give them yourself and analyze again. The picture area can be misdetected when subtitles sit in a black bar or when the picture is very dark.
 
 ```powershell
-& $cr analyze $p --cuts "36,60"
+& $cr analyze $p --cuts "48,84"
 & $cr analyze $p --picture "0,140,1920,800"
 ```
 
@@ -386,7 +388,7 @@ A project folder holds the reference video, photos of people and generated mater
 **Verified**
 
 - 381 automated tests pass. The tests build their own synthetic clips with ffmpeg, so the repository contains no video files.
-- The whole flow, from creating a project to the final video, the comparison video, the report and the ledger audit, has been run from the command line on a synthetic clip (with a stand-in clip in place of a generated result).
+- The whole flow, from creating a project to the final video, the comparison video, the report and the ledger audit, has been run from the command line on the example clip (three shots built from generated stills, with a stand-in clip in place of a generated video).
 - On a ten-second letterboxed live-action clip (1920x1080, 23.976 fps, 240 frames, five shots) the picture area and all four cuts were found with zero frames of error.
 - The approval ledger is covered by tests for issuing without approval, exceeding the limit, a damaged ledger, changes made after a quote and two commands running at the same moment.
 - The whole code base was read through by an independent reviewer, and a fresh agent that had only the skill document followed it from start to finish in a dry run. The problems they found have been fixed.
