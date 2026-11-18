@@ -10,13 +10,24 @@ sample) and out/soundtrack.json:
 2. Loudness: the integrated loudness of the sum is measured with ffmpeg's loudnorm in measurement
    mode; one static gain brings it to TARGET_LUFS, then alimiter holds the peaks under CEILING_DBFS
    (latency compensated, so nothing moves in time).
-3. Reference check (fail closed): when the reference video has an audio stream, the largest
-   absolute normalised cross-correlation between the mix and the reference's sound, both mono at
-   8 kHz, over lags of plus or minus 0.5 s, must stay below REFERENCE_LIMIT; otherwise the mix
-   carries the reference's sound, is refused, and nothing is left behind.
+3. Reference check (fail closed, reference_problem): when the reference video has an audio stream,
+   its sound is put on the video's clock (the stream's start offset) and compared with the mix, both
+   mono at 8 kHz: the largest absolute normalised cross-correlation over the whole film, and the
+   same measure in every WINDOW-second window (hop WINDOW_HOP, near-silent windows skipped), each
+   over lags of plus or minus MAX_LAG. At REFERENCE_LIMIT or more, in either, the mix carries the
+   reference's sound and is refused; each placed sound is then checked alone to name the ones that
+   carry it.
 
-Both files are written to scratch names in out/ and moved into place only when everything passed.
-check() is what assemble uses: it returns the soundtrack only while its bytes are the ones mixed.
+   What the measure still cannot catch: a copy shifted by more than MAX_LAG from its place in the
+   reference; a copy buried in every window under other sound with about four times its energy
+   (6 dB louder); a copy changed in pitch, speed or spectrum; an excerpt much shorter than a window
+   under other sound. Two unrelated sounds that hold the same steady pitch for a whole window can
+   also reach the limit and be refused.
+
+Both files are written to scratch names in out/ and moved into place only when everything passed. A
+refused mix also removes the soundtrack an earlier mix left, so no soundtrack older than the refusal
+remains. check() is what assemble uses: it returns the soundtrack only while its bytes are the ones
+mixed, and assemble runs reference_problem on whatever audio goes into the deliverable.
 """
 
 import json
@@ -32,7 +43,8 @@ import numpy as np
 from cine_recast import ledger, sound
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import ToolNotFound, audio_streams, decode_audio, raw_audio_input, run_piped
+from cine_recast.ffmpeg import (ToolNotFound, align_audio, audio_offset, audio_streams, decode_audio, raw_audio_input,
+                                run_piped)
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.paths import ProjectPaths, sha256_of
 from cine_recast.project import load_project
@@ -46,6 +58,9 @@ SILENCE = 2.0 ** -23        # a sum whose peak is below one 24-bit step is digit
 CHECK_RATE = 8000           # the reference check compares mono signals at this rate
 MAX_LAG = 0.5               # seconds of lag searched either way
 REFERENCE_LIMIT = 0.5       # a correlation at or above this means the mix carries the reference's sound
+WINDOW = 2.0                # seconds of each window of the windowed reference check
+WINDOW_HOP = 1.0            # seconds between the starts of two windows
+QUIET = 1e-4                # a window whose RMS is below this (about -80 dBFS) is skipped
 CUT_WINDOW = 2              # a sound starting within this many frames of a cut is listed at that cut
 _BLOCK = 1 << 16            # samples of the mix correlated at a time
 
@@ -128,22 +143,89 @@ def max_correlation(mix: np.ndarray, reference: np.ndarray, max_lag: int) -> flo
     return float(min(1.0, ncc.max()))
 
 
-def _reference_correlation(root: Path, mixed: Path) -> float | None:
-    """max_correlation of the mix and the reference's sound, or None when the reference has no audio
-    stream. A reference whose streams cannot be read refuses the mix (fail closed)."""
+def windowed_correlation(mix: np.ndarray, reference: np.ndarray, rate: int) -> float:
+    """The largest absolute normalised cross-correlation of the two mono signals within any window of
+    WINDOW seconds (hop WINDOW_HOP) of the mix, each over lags of plus or minus MAX_LAG against the
+    reference around the same time. Windows where either side is near-silent are skipped; 0.0 when
+    every window is."""
+    x = np.asarray(mix, dtype=np.float64).ravel()
+    y = np.asarray(reference, dtype=np.float64).ravel()
+    size, hop, lag = round(WINDOW * rate), round(WINDOW_HOP * rate), round(MAX_LAG * rate)
+    best = 0.0
+    for begin in range(0, max(1, len(x) - size + hop), hop):
+        part = x[begin:begin + size]
+        lo, hi = max(0, begin - lag), min(len(y), begin + len(part) + lag)
+        if len(part) < rate // 4 or hi - lo < len(part) // 2:
+            continue
+        if math.sqrt(float((part ** 2).mean())) < QUIET or math.sqrt(float((y[lo:hi] ** 2).mean())) < QUIET:
+            continue
+        padded = np.zeros(len(part) + 2 * lag)          # the reference around the window, zero outside it
+        padded[lo - (begin - lag):hi - (begin - lag)] = y[lo:hi]
+        best = max(best, _window_ncc(part, padded, lag))
+    return best
+
+
+def _window_ncc(part: np.ndarray, around: np.ndarray, lag: int) -> float:
+    """Largest absolute NCC of `part` against the slices around[k:k + len(part)], k = 0 .. 2 * lag,
+    each normalised by the energies of the two slices (means removed)."""
+    x = part - part.mean()
+    size = 1 << int(len(around) + len(x)).bit_length()
+    corr = np.fft.irfft(np.fft.rfft(around, size) * np.conj(np.fft.rfft(x, size)), size)[:2 * lag + 1]
+    sums = np.concatenate([[0.0], np.cumsum(around)])
+    squares = np.concatenate([[0.0], np.cumsum(around * around)])
+    k = np.arange(2 * lag + 1)
+    n = len(x)
+    slice_sum = sums[k + n] - sums[k]
+    energy_y = squares[k + n] - squares[k] - slice_sum ** 2 / n
+    energy_x = float((x * x).sum())
+    usable = (energy_y > 1e-12 * max(energy_x, 1e-300)) & (energy_x > 0)
+    if not usable.any():
+        return 0.0
+    return float(min(1.0, (np.abs(corr[usable]) / np.sqrt(energy_x * energy_y[usable])).max()))
+
+
+def _reference_samples(root: Path) -> np.ndarray | None:
+    """The reference's sound, mono at CHECK_RATE, on the video's clock; None when the reference has no
+    audio stream. A reference whose streams cannot be read is refused (fail closed)."""
     reference = root / load_project(root)["reference"]
     try:
-        has_audio = audio_streams(reference) > 0
+        if audio_streams(reference) == 0:
+            return None
+        offset = audio_offset(reference)
+        samples = decode_audio(reference, rate=CHECK_RATE, channels=1)[:, 0]
     except ToolNotFound:
         raise
     except CineRecastError as exc:
-        raise CineRecastError(f"the reference video cannot be read to check the mix against its sound ({exc.message}); "
-                              "no soundtrack written") from exc
-    if not has_audio:
-        return None
-    ours = decode_audio(mixed, rate=CHECK_RATE, channels=1)[:, 0]
-    theirs = decode_audio(reference, rate=CHECK_RATE, channels=1)[:, 0]
-    return max_correlation(ours, theirs, round(MAX_LAG * CHECK_RATE))
+        raise CineRecastError(f"the reference video cannot be read to check the sound against it ({exc.message}); "
+                              "nothing written") from exc
+    return align_audio(samples, offset, CHECK_RATE)
+
+
+def _similarity(ours: np.ndarray, theirs: np.ndarray) -> tuple[float, float]:
+    """(whole-film correlation, largest windowed correlation)."""
+    return (max_correlation(ours, theirs, round(MAX_LAG * CHECK_RATE)),
+            windowed_correlation(ours, theirs, CHECK_RATE))
+
+
+def reference_problem(root: Path, audio: Path, what: str) -> tuple[float | None, str | None]:
+    """(the whole-film correlation of `audio` with the reference's sound, or None without reference
+    audio; the refusal sentence when the whole-film or a windowed correlation reaches
+    REFERENCE_LIMIT, else None). `what` names the audio in the sentence."""
+    theirs = _reference_samples(Path(root))
+    if theirs is None:
+        return None, None
+    whole, window = _similarity(decode_audio(audio, rate=CHECK_RATE, channels=1)[:, 0], theirs)
+    if max(whole, window) < REFERENCE_LIMIT:
+        return whole, None
+    return whole, (f"{what} carries the sound of the reference video (correlation {whole:.3f} over the whole film, "
+                   f"{window:.3f} in the most similar {WINDOW:g}-second window; the limit is {REFERENCE_LIMIT})")
+
+
+def _to_check_rate(samples: np.ndarray) -> np.ndarray:
+    """Soundtrack samples (RATE, stereo, float32) as mono at CHECK_RATE, resampled by ffmpeg."""
+    out, _ = run_piped([*raw_audio_input(RATE, CHANNELS), "-ac", "1", "-ar", str(CHECK_RATE), "-f", "f32le",
+                        "-acodec", "pcm_f32le", "pipe:1"], samples.astype("<f4").tobytes())
+    return np.frombuffer(out[:len(out) - len(out) % 4], dtype="<f4").astype(np.float64)
 
 
 # --- the mix -------------------------------------------------------------------------------
@@ -171,6 +253,33 @@ def _placed(root: Path, frames: int) -> list[dict]:
     return placed
 
 
+def _place(buffer: np.ndarray, root: Path, item: dict, info) -> None:
+    """Add the item, shaped, at its start frame into the film-long buffer; what runs past the end of
+    the film is cut with an END_FADE fade."""
+    total = len(buffer)
+    clip = _shaped(root / item["file"], item)
+    start = _samples(item["at_frame"], info.fps_num, info.fps_den)
+    if start + len(clip) > total:                   # the film ends during this sound
+        clip = clip[:total - start].copy()
+        length = min(len(clip), round(END_FADE * RATE))
+        if length > 0:
+            clip[len(clip) - length:] *= _ramp(length, False)[:, None]
+    buffer[start:start + len(clip)] += clip
+
+
+def _carriers(root: Path, placed: list[dict], info, theirs: np.ndarray) -> list[tuple[str, float]]:
+    """Each placed sound checked alone against the reference's sound: those at or above the limit, or
+    the most similar one when none reaches it alone, as (id, correlation), most similar first."""
+    scores = []
+    for item in placed:
+        alone = np.zeros((_samples(info.frames, info.fps_num, info.fps_den), CHANNELS), dtype=np.float32)
+        _place(alone, root, item, info)
+        scores.append((item["id"], max(_similarity(_to_check_rate(alone), theirs))))
+    scores.sort(key=lambda pair: -pair[1])
+    hits = [pair for pair in scores if pair[1] >= REFERENCE_LIMIT]
+    return hits or scores[:1]
+
+
 def _cut_list(root: Path, placed: list[dict]) -> list[dict]:
     return [{"frame": shot.start, "sounds": [item["id"] for item in placed
                                              if abs(item["at_frame"] - shot.start) <= CUT_WINDOW]}
@@ -179,9 +288,22 @@ def _cut_list(root: Path, placed: list[dict]) -> list[dict]:
 
 def mix(root: Path) -> dict:
     """Write out/soundtrack.wav and out/soundtrack.json (see the module docstring) and return the
-    record with "path" added. Refused, with nothing written: no sound done and unmuted, a sum that
-    is digital silence or too quiet to measure, a mix that carries the reference's sound."""
+    record with "path" added. Refused, with nothing written and the soundtrack of an earlier mix
+    removed: no sound done and unmuted, a sum that is digital silence or too quiet to measure, a mix
+    that carries the reference's sound, and every other refusal."""
     root = Path(root)
+    try:
+        return _mix(root)
+    except ToolNotFound:
+        raise                                       # the machine lacks ffmpeg: not a refused mix
+    except CineRecastError:
+        pp = ProjectPaths(root)
+        pp.soundtrack_file.unlink(missing_ok=True)
+        pp.soundtrack_record.unlink(missing_ok=True)
+        raise
+
+
+def _mix(root: Path) -> dict:
     pp = ProjectPaths(root)
     load_project(root)
     info, _ = load_video(root)
@@ -193,14 +315,7 @@ def mix(root: Path) -> dict:
     fps = Fraction(info.fps_num, info.fps_den)
     mixed = np.zeros((total, CHANNELS), dtype=np.float32)
     for item in placed:
-        clip = _shaped(root / item["file"], item)
-        start = _samples(item["at_frame"], info.fps_num, info.fps_den)
-        if start + len(clip) > total:                   # the film ends during this sound
-            clip = clip[:total - start].copy()
-            length = min(len(clip), round(END_FADE * RATE))
-            if length > 0:
-                clip[len(clip) - length:] *= _ramp(length, False)[:, None]
-        mixed[start:start + len(clip)] += clip
+        _place(mixed, root, item, info)
     if float(np.abs(mixed).max()) < SILENCE:
         raise CineRecastError("the mix is digital silence (every placed sound is silent or gained down to nothing); "
                               "no soundtrack written")
@@ -226,13 +341,14 @@ def mix(root: Path) -> dict:
             raise CineRecastError(f"the written soundtrack has {len(written)} samples, the film needs {total}")
         peak = float(np.abs(written).max())
         after = _loudness(["-i", str(scratch)])
-        correlation = _reference_correlation(root, scratch)
-        if correlation is not None and correlation >= REFERENCE_LIMIT:
+        correlation, problem = reference_problem(root, scratch, "the mix")
+        if problem:
+            carriers = _carriers(root, placed, info, _reference_samples(root))
+            named = ", ".join(f"{sid} (correlation {value:.3f} alone)" for sid, value in carriers)
             raise CineRecastError(
-                f"the mix carries the sound of the reference video (correlation {correlation:.3f} with the "
-                f"reference's sound, the limit is {REFERENCE_LIMIT}); a sound of the reference was registered as a "
-                "generated sound: mute it with sound set --mute or replace it with a newly generated one; no "
-                "soundtrack written")
+                f"{problem}; it comes from sound(s) {named}; a sound of the reference was registered as a generated "
+                "sound: mute it with sound set --mute or replace it with a newly generated one; no soundtrack "
+                "written, and an earlier soundtrack was removed")
         record = {
             "sounds": [{"id": item["id"], "kind": item.get("kind"), "label": item.get("label"),
                         "start_seconds": round(float(item["at_frame"] / fps), 6), "at_frame": item["at_frame"],

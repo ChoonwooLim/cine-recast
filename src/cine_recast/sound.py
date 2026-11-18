@@ -290,7 +290,7 @@ def _check_result_file(root: Path, sound_id: str, source: Path) -> None:
         raise CineRecastError(f"sound {sound_id}: result file {source} must be a .wav, .mp3, .m4a, .ogg or .flac file")
     if not source.is_file():
         raise CineRecastError(f"sound {sound_id}: result file not found: {source}")
-    folder = inside_folder(source, [*pp.material_folders(), pp.sounds_dir])
+    folder = inside_folder(source, [*pp.material_folders(), pp.sounds_dir, pp.extras_dir])
     if folder is not None:
         raise CineRecastError(f"sound {sound_id}: result file {source} is project material (inside the project's "
                               f"{folder.name} folder), not a generation result; register only files downloaded from "

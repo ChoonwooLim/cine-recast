@@ -185,3 +185,69 @@ def test_preview_still_checks_the_frame_count(finished3):
     with pytest.raises(CineRecastError, match="frames"):
         assemble(finished3.root, preview=True)
     assert not (finished3.out_dir / "preview.mp4").exists()
+
+
+@pytest.fixture(scope="session")
+def _noisy_film_template(tmp_path_factory):
+    """A one-unit project (testsrc2, 96 frames) whose reference carries pink noise, with a take
+    conformed, selected and confirmed; the reference's sound extracted to a WAV outside the project."""
+    from conftest import _encode_args, _run, fake_take, planned_project
+
+    from cine_recast.conform import conform
+    from cine_recast.review import confirm
+    from cine_recast.takes import select
+
+    base = tmp_path_factory.mktemp("noisy_film")
+    clip = base / "noisy.mp4"
+    _run(["-f", "lavfi", "-i", "testsrc2=size=384x216:rate=24", "-f", "lavfi", "-i",
+          "anoisesrc=color=pink:seed=7:amplitude=0.5:sample_rate=48000", "-frames:v", "96", "-t", "4",
+          "-c:a", "aac", "-b:a", "192k", *_encode_args(clip)])
+    pp = planned_project(base / "p", clip)
+    take = fake_take(pp.root, pp.unit_id, base)
+    conform(pp.root, pp.unit_id, take)
+    select(pp.root, pp.unit_id, take)
+    confirm(pp.root, pp.unit_id, take, "owner")
+    _run(["-i", str(clip), "-vn", "-c:a", "pcm_s16le", str(base / "reference_sound.wav")])
+    return base
+
+
+@pytest.fixture
+def noisy_film(_noisy_film_template, tmp_path):
+    from cine_recast.paths import ProjectPaths
+
+    shutil.copytree(_noisy_film_template, tmp_path / "n")
+    pp = ProjectPaths(tmp_path / "n" / "p")
+    pp.reference_sound = tmp_path / "n" / "reference_sound.wav"
+    return pp
+
+
+def test_assemble_refuses_audio_that_carries_the_reference_sound(noisy_film, tmp_path):
+    with pytest.raises(CineRecastError, match="reference") as refused:
+        assemble(noisy_film.root, audio=noisy_film.reference_sound)        # a copy kept outside the project
+    assert "correlation" in refused.value.message
+    assert not (noisy_film.out_dir / "final.mp4").exists() and not (noisy_film.out_dir / "master.mov").exists()
+    unrelated = tmp_path / "score.wav"
+    run(["-f", "lavfi", "-i", "anoisesrc=color=pink:seed=99:amplitude=0.5:duration=4", str(unrelated)])
+    assert assemble(noisy_film.root, audio=unrelated).sound == "file score.wav"
+
+
+def test_assemble_refuses_a_hand_made_soundtrack_of_the_reference_sound(noisy_film):
+    from cine_recast.paths import sha256_of
+
+    pp = noisy_film
+    pp.out_dir.mkdir(parents=True, exist_ok=True)
+    run(["-i", str(pp.reference_sound), "-ar", "48000", "-ac", "2", "-af", "apad=whole_len=192000,atrim=end_sample=192000",
+         "-c:a", "pcm_s24le", str(pp.soundtrack_file)])
+    write_json(pp.soundtrack_record, {"sounds": [], "sha256": sha256_of(pp.soundtrack_file)})
+    with pytest.raises(CineRecastError, match="reference"):
+        assemble(pp.root)
+    assert assemble(pp.root, preview=True).sound == "soundtrack (0 items)"   # a preview is not a deliverable
+
+
+def test_assemble_refuses_when_the_reference_cannot_be_read(noisy_film, tmp_path):
+    unrelated = tmp_path / "score.wav"
+    run(["-f", "lavfi", "-i", "anoisesrc=color=pink:seed=99:amplitude=0.5:duration=4", str(unrelated)])
+    reference = noisy_film.root / read_json(noisy_film.project_file)["reference"]
+    reference.write_bytes(b"no longer a video")
+    with pytest.raises(CineRecastError, match="reference video cannot be read"):
+        assemble(noisy_film.root, audio=unrelated)

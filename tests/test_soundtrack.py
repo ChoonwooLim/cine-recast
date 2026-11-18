@@ -193,7 +193,8 @@ def test_the_reference_sound_is_refused_and_nothing_is_left(noisy, tmp_path, at_
                    gain_db=-6)
     with pytest.raises(CineRecastError, match="reference") as refused:
         soundtrack.mix(root)
-    assert "correlation" in refused.value.message
+    named = refused.value.message.split("sound(s)")[1].split(";")[0]
+    assert "correlation" in refused.value.message and "s0001" in named and "s0002" not in named
     assert not noisy.out_dir.exists() or not any(noisy.out_dir.iterdir())    # no soundtrack, no scratch file
 
 
@@ -222,3 +223,100 @@ def test_max_correlation():
     assert soundtrack.max_correlation(np.concatenate([np.zeros(4800), x])[:16000], x, 4000) < 0.1   # beyond 0.5 s
     assert soundtrack.max_correlation(other, x, 4000) < 0.1
     assert soundtrack.max_correlation(np.zeros(16000), x, 4000) == 0.0
+
+
+# --- task 20 fix wave: windowed reference check (I1), naming the sounds (M2), nothing left behind
+# --- (M3), the audio start offset (M4), an unreadable reference (M7)
+
+def _noise(seconds, seed, rate=8000):
+    return np.random.default_rng(seed).standard_normal(int(seconds * rate))
+
+
+def test_windowed_correlation_catches_an_excerpt_in_place():
+    reference = _noise(20, 1)
+    mix = 0.3 * _noise(20, 2)                                                  # an unrelated bed
+    mix[80000:104000] += reference[80000:104000]                               # 3 s of the reference at its time
+    assert soundtrack.max_correlation(mix, reference, 4000) < 0.5             # the whole-film value misses it
+    assert soundtrack.windowed_correlation(mix, reference, 8000) > 0.8
+    shifted = 0.3 * _noise(20, 2)
+    shifted[82400:106400] += reference[80000:104000]                           # 0.3 s late: within the lag
+    assert soundtrack.windowed_correlation(shifted, reference, 8000) > 0.8
+    late = 0.3 * _noise(20, 2)
+    late[88000:112000] += reference[80000:104000]                              # 1 s late: a documented residual
+    assert soundtrack.windowed_correlation(late, reference, 8000) < 0.5
+    assert soundtrack.windowed_correlation(np.zeros(160000), reference, 8000) == 0.0
+    assert soundtrack.windowed_correlation(_noise(20, 3), reference, 8000) < 0.2
+
+
+def test_an_excerpt_of_the_reference_is_refused_and_named(noisy, tmp_path):
+    root = noisy.root
+    excerpt = tmp_path / "excerpt.wav"
+    _run(["-i", str(noisy.reference_sound), "-af", "atrim=start=1.0:end=2.5", str(excerpt)])
+    done_sound(root, make_noise(tmp_path / "bed.wav", 4, seed=99, amplitude=0.6), kind="ambience", seconds=4)
+    done_sound(root, excerpt, seconds=2, at_frame=24)                          # 1.0 s, its own place
+    with pytest.raises(CineRecastError, match="reference") as refused:
+        soundtrack.mix(root)
+    message = refused.value.message
+    assert "s0002" in message and "s0001" not in message.split("sound(s)")[1].split(";")[0]
+    assert not noisy.out_dir.exists() or not any(noisy.out_dir.iterdir())
+
+
+def test_a_refused_mix_removes_the_earlier_soundtrack(noisy, tmp_path):
+    root = noisy.root
+    done_sound(root, make_noise(tmp_path / "other.wav", 4, seed=99), kind="ambience", seconds=4)
+    soundtrack.mix(root)
+    assert noisy.soundtrack_file.is_file() and noisy.soundtrack_record.is_file()
+    done_sound(root, noisy.reference_sound, kind="ambience", seconds=4)
+    with pytest.raises(CineRecastError, match="reference"):
+        soundtrack.mix(root)
+    assert not noisy.soundtrack_file.exists() and not noisy.soundtrack_record.exists()
+
+
+def test_a_mix_refused_for_another_reason_also_leaves_no_soundtrack(sound3, tmp_path):
+    root = sound3.root
+    done_sound(root, make_tone(tmp_path / "a.wav", 1), seconds=1)
+    soundtrack.mix(root)
+    sound.set_placement(root, "s0001", mute=True)
+    with pytest.raises(CineRecastError, match="no sound is done"):
+        soundtrack.mix(root)
+    assert not sound3.soundtrack_file.exists() and not sound3.soundtrack_record.exists()
+
+
+@pytest.fixture(scope="session")
+def _late_audio_template(tmp_path_factory):
+    """A one-shot project whose reference (MOV) has pink noise as its sound, starting 1.0 s after the
+    picture; that sound extracted to a WAV file outside the project (it starts at its first sample)."""
+    from cine_recast.analyze import analyze
+    from cine_recast.project import init_project
+
+    base = tmp_path_factory.mktemp("late")
+    clip = base / "late.mov"
+    _run(["-f", "lavfi", "-i", "testsrc2=size=384x216:rate=24", "-itsoffset", "1.0", "-f", "lavfi", "-i",
+          "anoisesrc=color=pink:seed=7:amplitude=0.5:sample_rate=48000:duration=3", "-frames:v", "96",
+          "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", str(clip)])
+    root = base / "p"
+    init_project(root, clip, "t")
+    analyze(root)
+    write_json(root / "models.json", {"models": [EXAMPLE_MODEL, AUDIO_MODEL]})
+    _run(["-i", str(clip), "-vn", "-c:a", "pcm_s16le", str(base / "reference_sound.wav")])
+    return base
+
+
+def test_the_reference_check_follows_the_audio_start_offset(_late_audio_template, tmp_path):
+    import shutil
+
+    shutil.copytree(_late_audio_template, tmp_path / "late")
+    root = tmp_path / "late" / "p"
+    done_sound(root, tmp_path / "late" / "reference_sound.wav", kind="ambience", seconds=3, at_frame=24)
+    with pytest.raises(CineRecastError, match="reference"):                  # placed at its true time
+        soundtrack.mix(root)
+
+
+def test_an_unreadable_reference_refuses_the_mix(noisy, tmp_path):
+    root = noisy.root
+    done_sound(root, make_noise(tmp_path / "other.wav", 4, seed=99), kind="ambience", seconds=4)
+    reference = root / read_json(root / "project.json")["reference"]
+    reference.write_bytes(b"this is no longer a video")
+    with pytest.raises(CineRecastError, match="reference video cannot be read"):
+        soundtrack.mix(root)
+    assert not noisy.out_dir.exists() or not any(noisy.out_dir.iterdir())

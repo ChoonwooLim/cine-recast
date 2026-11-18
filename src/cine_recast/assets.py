@@ -103,17 +103,24 @@ def _payload(root: Path, asset: dict) -> dict:
     }
 
 
-def _rights_problems(root: Path, label: str, element: dict | None) -> list[str]:
+def _rights_problems(root: Path, label: str, element: dict | None, refs: list) -> list[str]:
     """The rights an asset with reference images needs, read now: the element's kind comes from
     casting.json as it is at this moment, the answers from project.json. A person needs
-    likeness_consent "yes" (the result carries the likeness of whoever is in the references); a
-    background needs an answered background_rights, as a background swap does."""
+    likeness_consent "yes" (the result carries the likeness of whoever is in the references), and so
+    does an asset of any element whose references show a person element (a file generated for that
+    person or a person's swap image, casting.person_refs); a background needs an answered
+    background_rights, as a background swap does."""
     kind = element.get("kind") if isinstance(element, dict) else None
     rights = load_project(root).get("rights") or {}
     if kind == "person" and casting.answer(rights, "likeness_consent") != "yes":
         return [f"{label}: element {element['id']!r} is a person and the asset has reference images, so the result "
                 "carries the likeness of the people in them; likeness_consent must be 'yes', record it with: "
                 "rights set --item likeness_consent --answer yes"]
+    shown = casting.person_refs(root, [ref for ref in refs if isinstance(ref, str)])
+    if shown and casting.answer(rights, "likeness_consent") != "yes":
+        return [f"{label}: the reference image(s) {', '.join(shown)} show a person element, so the result carries "
+                "that person's likeness whatever the element it belongs to; likeness_consent must be 'yes', record "
+                "it with: rights set --item likeness_consent --answer yes"]
     if kind == "background" and casting.answer(rights, "background_rights") is None:
         return [f"{label}: element {element['id']!r} is a background and the asset has reference images, but "
                 "background_rights is not answered; record it with: rights set --item background_rights"]
@@ -166,7 +173,7 @@ def _problems(root: Path, asset: dict, models: dict[str, dict], elements: dict[s
             problems.append(f"{label}: {len(refs)} ref images, but model {model!r} takes at most "
                             f"{spec['image_refs']} (image_refs).")
         if refs:
-            problems += _rights_problems(root, label, elements.get(element) if isinstance(element, str) else None)
+            problems += _rights_problems(root, label, elements.get(element) if isinstance(element, str) else None, refs)
     if not is_text(asset.get("batch")):
         problems.append(f"{label}: batch must not be empty.")
     return problems

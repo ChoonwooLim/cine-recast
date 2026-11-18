@@ -28,7 +28,7 @@ from pathlib import Path
 from cine_recast import casting, ledger
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import cut_frames
+from cine_recast.ffmpeg import ToolNotFound, cut_frames, probe
 from cine_recast.jsonio import read_json, read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch plan.IssueRefused)
 from cine_recast.lifecycle import (SENT, UNISSUED, fail, finish, highest, is_number, is_text, issue_in_order, now,
@@ -508,8 +508,11 @@ def refresh_unit(root: Path, unit_id: str, *, model: str | None = None, method: 
     must be a video model that takes the unit's length (max_seconds) and, for edit, a reference video;
     duration, aspect ratio, the unit's default resolution (of the same quality as before) and
     pad_frames are computed again, and the unit's jobs that are not issued yet lose their quote (the
-    price belongs to the other model). The reference clip is written again only when pad_frames
-    changes. Without a change of model or method, a job quoted with the old inputs keeps its quote
+    price belongs to the other model). The reference clip is written again when pad_frames changes
+    or when its frame count is not the unit's frames plus pad_frames (so a run stopped between the
+    clip and plan.json is healed by running again); it is replaced before plan.json is saved, and a
+    clip that cannot be replaced (held open by another program) refuses with nothing written.
+    Without a change of model or method, a job quoted with the old inputs keeps its quote
     and the quote digest makes jobs next refuse it until it is quoted again.
 
     The unit keeps its id, shots, frames, prompt, qc_skip, takes, selected take and confirmation; jobs
@@ -570,26 +573,39 @@ def refresh_unit(root: Path, unit_id: str, *, model: str | None = None, method: 
                   "aspect_ratio": closest_aspect(spec, box.aspect),
                   "resolution": _resolution(spec, _quality_of(old_spec, old_resolution))}
     clip = pp.unit_dir(unit_id) / "ref.mp4"
-    staged = None
-    if pad != old_pad or not clip.is_file():
+    if pad != old_pad or not _clip_has(clip, frames + pad):
         staged = clip.with_name("ref.new.mp4")
-        cut_frames(root / project["reference"], item["start"], item["end"], staged, crop=box.as_crop(), hold=pad)
-    try:
-        item.update(model=new_model, method=new_method, params=params, inputs=inputs)
-        if changed or "pad_frames" in item:
-            item["pad_frames"] = pad
-        if changed:
-            for job in data["jobs"]:
-                if isinstance(job, dict) and job.get("unit") == unit_id and job.get("state") in UNISSUED:
-                    job.update(state="planned", est_credits=None, quote_digest=None)
-                    job.pop("sent_params", None)
-        _save(root, data)
-        if staged is not None:
-            staged.replace(clip)
-    finally:
-        if staged is not None:
+        try:
+            cut_frames(root / project["reference"], item["start"], item["end"], staged, crop=box.as_crop(), hold=pad)
+            try:
+                staged.replace(clip)            # before plan.json is saved: a failure here leaves the plan as it was
+            except OSError as exc:
+                raise CineRecastError(f"cannot replace {clip} (is it open in another program?): {exc}; nothing "
+                                      "written") from exc
+        finally:
             staged.unlink(missing_ok=True)
+    item.update(model=new_model, method=new_method, params=params, inputs=inputs)
+    if changed or "pad_frames" in item:
+        item["pad_frames"] = pad
+    if changed:
+        for job in data["jobs"]:
+            if isinstance(job, dict) and job.get("unit") == unit_id and job.get("state") in UNISSUED:
+                job.update(state="planned", est_credits=None, quote_digest=None)
+                job.pop("sent_params", None)
+    _save(root, data)
     return item
+
+
+def _clip_has(clip: Path, frames: int) -> bool:
+    """True when the clip exists and has exactly `frames` frames (an unreadable clip has not)."""
+    if not clip.is_file():
+        return False
+    try:
+        return probe(clip).frames == frames
+    except ToolNotFound:
+        raise
+    except CineRecastError:
+        return False
 
 
 # --- payloads and quotes -------------------------------------------------------------------
@@ -857,7 +873,8 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     source = Path(file)
     if not source.is_file():
         raise CineRecastError(f"job {job_id}: result file not found: {source}")
-    folder = inside_folder(source, ProjectPaths(root).material_folders())
+    pp = ProjectPaths(root)
+    folder = inside_folder(source, [*pp.material_folders(), pp.extras_dir])
     if folder is not None:
         raise CineRecastError(f"job {job_id}: {source} is project material (inside the project's {folder.name} "
                               "folder), not a generation result; register only files downloaded from the "

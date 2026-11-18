@@ -160,3 +160,23 @@ def test_onsets_are_spaced_and_limited():
         levels[5 + 10 * n] = -60.0 + n
     assert onsets(levels) == [5 + 10 * n for n in range(44, 4, -1)]     # the 40 strongest, strongest first
     assert onsets([-90.0, -85.0, -82.0]) == []      # jumps below 9 dB
+
+
+def test_audio_hits_follow_the_audio_start_offset(tmp_path):
+    """The same bursts as _clicks_clip, in a MOV whose PCM sound starts 0.25 s (6 frames) after the
+    picture: every hit moves 6 frames later."""
+    from conftest import _run
+
+    from cine_recast.project import init_project
+
+    bursts = "+".join(rf"{level}*between(t\,{frame}/24\,{frame}/24+0.005)" for frame, level in
+                      ((10, 0.5), (30, 0.2), (55, 0.9)))
+    clip = tmp_path / "late.mov"
+    _run(["-f", "lavfi", "-i", "testsrc2=size=384x216:rate=24", "-itsoffset", "0.25", "-f", "lavfi", "-i",
+          f"aevalsrc=({bursts})*sin(2*PI*2000*t):s=48000:d=2.5", "-frames:v", "72", "-map", "0:v", "-map", "1:a",
+          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le", str(clip)])
+    pp = init_project(tmp_path / "p", clip, "t")
+    analyze(pp.root)
+    data = read_json(pp.audio_file)
+    assert data["hits"] == [61, 16, 36] and len(data["rms_db"]) == 72
+    assert max(data["rms_db"][:6]) == -90.0                                 # before the sound starts

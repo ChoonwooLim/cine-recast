@@ -412,3 +412,24 @@ def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):
         record_done(root, "a0002", "prov-2", 1.0, [root / first])
     assert [p.name for p in assets3.asset_dir("hero").iterdir()] == ["a0001_1.png"]
     assert job_states(root)["a0002"] == "issued"
+
+
+def test_a_person_reference_needs_consent_whatever_the_element(assets3, tmp_path):
+    root = assets3.root
+    hero = generate_and_use(root, "hero", tmp_path)                       # a virtual person, consent not_applicable
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        add(root, element="sky_battle", prompt="The rider from the reference image in front of a sunset sky.",
+            model="image_model_x", batch="pair", refs=[root / hero])
+    photo = png(root / "swap" / "person.png")
+    c = read_json(assets3.casting_file); c["swaps"][0]["images"] = ["swap/person.png"]
+    write_json(assets3.casting_file, c)
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        add(root, element="sky_battle", prompt="The person from the reference image in front of a sunset sky.",
+            model="image_model_x", batch="pair", refs=[photo])
+    set_right(root, "likeness_consent", "yes")
+    assert add(root, element="sky_battle", prompt="The person from the reference image in front of a sunset sky.",
+               model="image_model_x", batch="pair", refs=[photo])["id"] == "a0002"
+    other = png(root / "swap" / "rock.png")                                # not a person's image: no consent needed
+    set_right(root, "likeness_consent", "not_applicable")
+    assert add(root, element="sky_battle", prompt="A rock face like the one in the reference image.",
+               model="image_model_x", batch="pair", refs=[other])["id"] == "a0003"

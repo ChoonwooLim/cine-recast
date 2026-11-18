@@ -168,6 +168,7 @@ def _reference_copy(pp, clip, tmp):
     (lambda pp, clip, tmp: make_tone(pp.out_dir / "soundtrack.wav", 2), "out folder"),
     (lambda pp, clip, tmp: make_tone(pp.root / "assets" / "t.wav", 2), "assets folder"),
     (lambda pp, clip, tmp: make_tone(pp.root / "Sounds" / "s0002.wav", 2), "sounds folder"),
+    (lambda pp, clip, tmp: make_tone(pp.root / "extras" / "x0001" / "t.wav", 2), "extras folder"),
 ])
 def test_done_refusals_leave_nothing(sound3, clip3, tmp_path, make, fragment):
     root = sound3.root
@@ -336,7 +337,9 @@ def test_a_damaged_sounds_file_is_named(sound3, text, fragment):
 def test_this_file_keeps_han_as_an_escape():
     from pathlib import Path
 
-    assert "\\u4e2d" in Path(__file__).read_text(encoding="utf-8")
+    from cine_recast.textrules import han_chars
+
+    assert han_chars(Path(__file__).read_text(encoding="utf-8")) == []      # Han only as escapes such as HAN
 
 
 def test_png_helper_is_not_audio(sound3, tmp_path):

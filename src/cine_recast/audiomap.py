@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from cine_recast.cuts import Shot
-from cine_recast.ffmpeg import VideoInfo, decode_audio
+from cine_recast.ffmpeg import VideoInfo, align_audio, audio_offset, decode_audio
 
 RATE = 16000            # the reference's sound is read mono at this rate
 FLOOR_DB = -90.0
@@ -72,8 +72,10 @@ def onsets(levels: list[float]) -> list[int]:
 
 
 def audio_map(reference: Path, info: VideoInfo, shots: list[Shot]) -> dict:
-    """The content of analysis/audio.json for a reference whose audio stream ffmpeg can decode."""
-    samples = decode_audio(reference, rate=RATE, channels=1)[:, 0]
+    """The content of analysis/audio.json for a reference whose audio stream ffmpeg can decode. The
+    samples are put on the video's clock first (ffmpeg.align_audio), so that a sound stream that
+    starts after the picture gives its hits at the frames where they are heard."""
+    samples = align_audio(decode_audio(reference, rate=RATE, channels=1)[:, 0], audio_offset(reference), RATE)
     levels = frame_levels(samples, info)
     hits = onsets(levels)
     x = np.asarray(samples, dtype=np.float64)

@@ -2,8 +2,10 @@
 
 The finished film is built only from conformed takes the user confirmed, plus generated sound: the
 soundtrack sound mix wrote (used only while its bytes are the ones mixed) or an audio file the
-caller supplies (an audio file that is the reference's material is refused). The reference video
-is used by compare() alone, and only there is its audio heard.
+caller supplies (an audio file that is the reference's material is refused). Whichever audio goes
+into the deliverable is compared with the reference's sound first (soundtrack.reference_problem,
+fail closed) and refused when it carries it; a preview is not checked. The reference video is used
+by compare() alone, and only there is its audio heard.
 
 The sound is cut or padded to the film's length: master.mov carries it as 24-bit PCM, final.mp4 as
 AAC at 256 kb/s. A preview (out/preview.mp4) joins the selected takes without the confirmations so
@@ -121,6 +123,11 @@ def assemble(root: Path, *, audio: Path | None = None, silent: bool = False, pre
     if missing:
         raise CineRecastError(f"no unit covers shot(s) {', '.join(map(str, missing))}; plan every shot first")
     sound_file, described = _sound(root, audio=audio, silent=silent, preview=preview)
+    if sound_file is not None and not preview:      # the deliverable never carries the reference's sound
+        _, problem = soundtrack.reference_problem(root, sound_file, f"the film's audio ({described})")
+        if problem:
+            raise CineRecastError(f"{problem}; the film's sound must be made for the film, the sound of the reference "
+                                  "is never used; nothing written")
     samples = round(Fraction(info.frames * info.fps_den * SOUND_RATE, info.fps_num))
     fit = ["-af", f"aresample={SOUND_RATE},apad=whole_len={samples},atrim=end_sample={samples}"]
     pp.out_dir.mkdir(parents=True, exist_ok=True)

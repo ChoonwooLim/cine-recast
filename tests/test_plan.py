@@ -1210,3 +1210,60 @@ def test_report_shows_the_model_the_selected_take_was_made_with(cast3, tmp_path)
     assert "| seedance_2_5 |" in row and "other_video" not in row
     [row] = [line for line in text.splitlines() if line.startswith("| 2 | 30-54 |")]
     assert "| other_video |" in row                                    # no take selected: the unit's model
+
+
+def _locked_replace(target_name):
+    """Path.replace that fails like Windows does when another program holds the target open."""
+    real = Path.replace
+
+    def replace(self, target):
+        if Path(target).name == target_name:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return real(self, target)
+
+    return replace
+
+
+def test_plan_unit_refuses_cleanly_when_the_clip_cannot_be_replaced(cast3, monkeypatch, capsys):
+    root = _per_shot(cast3)
+    clip = cast3.unit_dir("u01") / "ref.mp4"
+    before = (cast3.plan_file.read_bytes(), clip.read_bytes())
+    monkeypatch.setattr(Path, "replace", _locked_replace("ref.mp4"))
+    capsys.readouterr()
+    assert main(["plan", "unit", str(root), "--unit", "u01", "--model", "other_video"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "open in another program" in err
+    monkeypatch.undo()
+    assert (cast3.plan_file.read_bytes(), clip.read_bytes()) == before
+    assert sorted(p.name for p in clip.parent.iterdir()) == ["ref.mp4"]
+
+
+def test_plan_unit_heals_a_clip_that_does_not_match_the_unit(cast3, monkeypatch):
+    from cine_recast import plan as plan_module
+    from cine_recast.plan import refresh_unit
+
+    root = _per_shot(cast3)
+    clip = cast3.unit_dir("u01") / "ref.mp4"
+    real_save = plan_module._save
+    monkeypatch.setattr(plan_module, "_save", lambda *a, **k: (_ for _ in ()).throw(OSError("crash while saving")))
+    with pytest.raises(OSError):
+        refresh_unit(root, "u01", model="other_video")                   # the clip is replaced, the plan is not
+    monkeypatch.setattr(plan_module, "_save", real_save)
+    assert probe(clip).frames == 30 and load(root)["units"][0]["pad_frames"] == 66
+    unit = refresh_unit(root, "u01")                                       # the same plan, the clip healed
+    assert unit["pad_frames"] == 66 and probe(clip).frames == 96
+    shutil.copyfile(cast3.shot_dir(2) / "ref.mp4", clip)                   # any clip of the wrong length
+    refresh_unit(root, "u01")
+    assert probe(clip).frames == 96
+
+
+def test_jobs_done_refuses_a_file_from_the_extras_folder(planned3, result_clip, capsys):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 10.0, "owner"); issue_next(root, "b")
+    inside = root / "extras" / "x0001" / "take.mp4"
+    inside.parent.mkdir(parents=True)
+    shutil.copyfile(result_clip, inside)
+    capsys.readouterr()
+    assert main(["jobs", "done", str(root), "--job", "j0001", "--provider-id", "p", "--credits", "1",
+                 "--file", str(inside)]) == 2
+    assert "extras folder" in capsys.readouterr().err

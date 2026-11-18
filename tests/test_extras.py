@@ -336,4 +336,6 @@ def test_the_quote_covers_the_content_of_a_start_image(taken):
 def test_this_file_keeps_han_as_an_escape():
     from pathlib import Path
 
-    assert "\\u4e2d" in Path(__file__).read_text(encoding="utf-8")
+    from cine_recast.textrules import han_chars
+
+    assert han_chars(Path(__file__).read_text(encoding="utf-8")) == []      # Han only as escapes such as HAN

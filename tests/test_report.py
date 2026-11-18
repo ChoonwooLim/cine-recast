@@ -119,3 +119,23 @@ def test_report_shows_who_confirmed_each_unit(finished3):
     text = write_report(finished3.root).read_text(encoding="utf-8")
     assert "| u01 | 1, 2, 3 | t001 | \ud655\uc778 \uc548 \ud568 |" in _section(text, "## \ub2e8\uc704\ubcc4 \uc0ac\uc6a9\uc790 \ud655\uc778")
     assert "- \uc0ac\uc6a9\uc790\uac00 \ud655\uc778\ud558\uc9c0 \uc54a\uc740 \ub2e8\uc704: u01" in _open_items(text)
+
+
+def test_a_pair_sheet_made_from_a_person_is_not_verified_as_not_applicable(assets3, tmp_path):
+    from cine_recast import assets, ledger
+    from cine_recast.casting import check, not_applicable_holds
+    from cine_recast.project import set_right
+
+    root = assets3.root
+    hero = generate_and_use(root, "hero", tmp_path)                       # virtual, made without references
+    set_right(root, "likeness_consent", "yes")
+    pair = assets.add(root, element="sky_battle", prompt="The rider from the reference image under a sunset sky.",
+                      model="image_model_x", batch="pair", refs=[root / hero])
+    assets.set_cost(root, pair["id"], 1.0); ledger.approve(root, "pair", 1.0, "owner"); assets.issue_next(root, "pair")
+    stored = assets.record_done(root, pair["id"], "prov-pair", 1.0, [png(tmp_path / "pair.png")])["files"][0]
+    assets.use(root, "sky_battle", stored)
+    set_right(root, "likeness_consent", "not_applicable")
+    assert check(root) == [] and not_applicable_holds(root) is False
+    write_models(root)
+    build(root, model="seedance_2_5", method="edit", batch="b")
+    assert "\ud655\uc778 \ud544\uc694" in _rights_line(root, "likeness_consent")

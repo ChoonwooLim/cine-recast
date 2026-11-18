@@ -157,6 +157,29 @@ def audio_streams(path: Path) -> int:
     return len(data.get("streams") or [])
 
 
+def audio_offset(path: Path) -> float:
+    """Seconds by which the first audio stream starts after the first video stream (negative when it
+    starts before); 0.0 when either start time is unknown. Raises CineRecastError when ffprobe
+    cannot read the file."""
+    starts = {}
+    for kind in ("v", "a"):
+        streams = _ffprobe(Path(path), ["-select_streams", f"{kind}:0", "-show_entries", "stream=start_time"])
+        try:
+            starts[kind] = float((streams.get("streams") or [{}])[0].get("start_time"))
+        except (TypeError, ValueError):
+            return 0.0
+    return starts["a"] - starts["v"]
+
+
+def align_audio(samples: np.ndarray, offset: float, rate: int) -> np.ndarray:
+    """Samples decoded from an audio stream placed on the video's clock: an offset > 0 (the sound
+    starts later) puts that much silence in front, an offset < 0 drops that much from the start."""
+    shift = round(offset * rate)
+    if shift > 0:
+        return np.concatenate([np.zeros((shift, *samples.shape[1:]), dtype=samples.dtype), samples])
+    return samples[-shift:] if shift < 0 else samples
+
+
 def run(args: list[str]) -> None:
     """Run ffmpeg with the given arguments. Raises CineRecastError with the stderr tail on failure.
 
