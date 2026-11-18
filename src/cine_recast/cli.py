@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, conform, ledger, plan, qc, takes
+from . import __version__, assemble, conform, ledger, plan, qc, report, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -168,6 +168,22 @@ def _cmd_qc(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_assemble(args: argparse.Namespace) -> int:
+    audio = Path(args.audio) if args.audio else None
+    print(assemble.assemble(Path(args.project), audio=audio))
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    print(assemble.compare(Path(args.project)))
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    print(report.write_report(Path(args.project)))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cine-recast")
     parser.add_argument("--version", action="version", version=f"cine-recast {__version__}")
@@ -303,6 +319,19 @@ def _build_parser() -> argparse.ArgumentParser:
     qc_p.add_argument("--unit", required=True)
     qc_p.add_argument("--take", required=True)
     qc_p.set_defaults(func=_cmd_qc)
+
+    assemble_p = sub.add_parser("assemble", help="join the selected takes into out/final.mp4 (and out/master.mov)")
+    assemble_p.add_argument("project", help="project folder")
+    assemble_p.add_argument("--audio", help="audio file to put in the film (the reference audio is never used)")
+    assemble_p.set_defaults(func=_cmd_assemble)
+
+    compare_p = sub.add_parser("compare", help="write out/compare.mp4: reference and result side by side")
+    compare_p.add_argument("project", help="project folder")
+    compare_p.set_defaults(func=_cmd_compare)
+
+    report_p = sub.add_parser("report", help="write out/report.md (Korean)")
+    report_p.add_argument("project", help="project folder")
+    report_p.set_defaults(func=_cmd_report)
     return parser
 
 

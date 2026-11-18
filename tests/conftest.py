@@ -352,3 +352,30 @@ def fake_take(root: Path, unit_id: str, tmp_path: Path, *, size: tuple[int, int]
             raise ValueError(f"extra_frames={extra_frames} leaves no frames")
         _run(["-i", str(whole), "-vf", f"trim=end_frame={keep},setpts=PTS-STARTPTS", "-an", *_encode_args(out)])
     return new_take(root, unit_id, out, {"job": "fake"})
+
+
+@pytest.fixture(scope="session")
+def _finished3_template(tmp_path_factory, _conformed3_template) -> Path:
+    """conformed3 + an approved, issued and finished job, a scored take, and that take selected."""
+    import shutil
+
+    from cine_recast import ledger
+    from cine_recast.plan import issue_next, set_cost
+    from cine_recast.qc import score_take
+    from cine_recast.takes import select
+
+    root = tmp_path_factory.mktemp("finished3") / "p"
+    shutil.copytree(_conformed3_template, root)
+    set_cost(root, "j0001", 40.0)
+    ledger.approve(root, "b", 50.0, "owner")
+    issue_next(root, "b")
+    ledger.done(root, "j0001", "prov-1", 38.0)
+    score_take(root, "u01", "t001")
+    select(root, "u01", "t001")
+    return root
+
+
+@pytest.fixture
+def finished3(_finished3_template, tmp_path):
+    """An isolated copy of the finished project: unit u01, take t001 conformed, scored and selected."""
+    return _copy_project(_finished3_template, tmp_path)
