@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import CAST_ELEMENTS, EXAMPLE_MODEL, IMAGE_MODEL, generate_and_use, png, run_cli
+from conftest import CAST_ELEMENTS, EXAMPLE_MODEL, IMAGE_MODEL, generate_and_use, png, run_cli, swap_image
 
 from cine_recast.assets import (add, generated_files, issue_next, list_assets, record_done, record_fail,
                                 ref_free_files, set_cost, use)
@@ -229,7 +229,8 @@ def test_a_unit_on_an_image_model_is_refused(planned3):
 
 def test_clearing_refs_afterwards_does_not_make_a_virtual_person(assets3, tmp_path):
     set_right(assets3.root, "likeness_consent", "yes")                          # refs need consent to be generated
-    image = generate_and_use(assets3.root, "hero", tmp_path, refs=[png(tmp_path / "ref.png")])
+    photo = swap_image(assets3.root, "ref.png", "hero")                         # the user's photo, in the swap table
+    image = generate_and_use(assets3.root, "hero", tmp_path, refs=[Path(photo)])
     set_right(assets3.root, "likeness_consent", "not_applicable")
     assert generated_files(assets3.root, "hero") == [image] and ref_free_files(assets3.root, "hero") == []
     data = read_json(assets3.assets_file); data["assets"][0]["refs"] = []; write_json(assets3.assets_file, data)
@@ -270,7 +271,8 @@ def test_person_asset_with_refs_needs_consent_at_add(assets3, tmp_path, capsys):
 def test_consent_withdrawn_after_add_stops_quote_and_issue(assets3, tmp_path):
     root = assets3.root
     set_right(root, "likeness_consent", "yes")
-    add(root, element="hero", prompt=PROMPT, model="image_model_x", batch="a1", refs=[png(tmp_path / "ref.png")])
+    add(root, element="hero", prompt=PROMPT, model="image_model_x", batch="a1",
+        refs=[Path(swap_image(root, "ref.png", "hero"))])
     set_cost(root, "a0001", 6.0); approve(root, "a1", 10.0, "owner")
     set_right(root, "likeness_consent", "no")
     before = assets3.ledger_file.read_text(encoding="utf-8")
@@ -291,7 +293,7 @@ def test_person_asset_without_refs_is_unaffected(assets3):
 
 def test_kind_is_read_from_casting_at_that_moment(assets3, tmp_path):
     root = assets3.root
-    ref = png(tmp_path / "ref.png")
+    ref = Path(swap_image(root, "ref.png", "sky_battle"))
     add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
         refs=[ref])                                              # a background with refs: background_rights "yes"
     c = read_json(assets3.casting_file); c["elements"][1]["kind"] = "person"; write_json(assets3.casting_file, c)
@@ -303,12 +305,13 @@ def test_background_asset_with_refs_needs_background_rights(analyzed3, tmp_path)
     root = analyzed3.root
     write_json(analyzed3.casting_file, {"elements": CAST_ELEMENTS, "swaps": []})
     write_json(analyzed3.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL]})
+    ref = Path(swap_image(root, "ref.png", "sky_battle"))
     with pytest.raises(CineRecastError, match="background_rights"):
         add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
-            refs=[png(tmp_path / "ref.png")])
+            refs=[ref])
     set_right(root, "background_rights", "unknown")              # answered, as for a background swap
     assert add(root, element="sky_battle", prompt="Sunset sky over red dunes.", model="image_model_x", batch="a1",
-               refs=[png(tmp_path / "ref.png")])["id"] == "a0001"
+               refs=[ref])["id"] == "a0001"
 
 
 @pytest.mark.parametrize("make", [
@@ -317,6 +320,9 @@ def test_background_asset_with_refs_needs_background_rights(analyzed3, tmp_path)
     lambda pp: png(pp.root / "takes" / "u01" / "t001" / "frame.png"),
     lambda pp: png(pp.root / "out" / "frame.png"),
     lambda pp: png(pp.root / "Analysis" / "review" / "frame.png"),
+    lambda pp: png(pp.root / "swap" / "photo.png"),                                 # final review 2 (m2), probe G
+    lambda pp: png(pp.root / "Sounds" / "frame.png"),
+    lambda pp: png(pp.root / "extras" / "x0001" / "start.png"),
 ])
 def test_done_refuses_project_material(assets3, make, capsys):
     root = assets3.root
@@ -417,19 +423,72 @@ def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):
 def test_a_person_reference_needs_consent_whatever_the_element(assets3, tmp_path):
     root = assets3.root
     hero = generate_and_use(root, "hero", tmp_path)                       # a virtual person, consent not_applicable
-    with pytest.raises(CineRecastError, match="likeness_consent"):
-        add(root, element="sky_battle", prompt="The rider from the reference image in front of a sunset sky.",
-            model="image_model_x", batch="pair", refs=[root / hero])
-    photo = png(root / "swap" / "person.png")
-    c = read_json(assets3.casting_file); c["swaps"][0]["images"] = ["swap/person.png"]
-    write_json(assets3.casting_file, c)
+    assert add(root, element="sky_battle", prompt="The rider from the reference image in front of a sunset sky.",
+               model="image_model_x", batch="pair", refs=[root / hero])["id"] == "a0002"   # final review 2 (m3)
+    photo = root / swap_image(root, "person.png", "hero", only=True)
     with pytest.raises(CineRecastError, match="likeness_consent"):
         add(root, element="sky_battle", prompt="The person from the reference image in front of a sunset sky.",
             model="image_model_x", batch="pair", refs=[photo])
     set_right(root, "likeness_consent", "yes")
     assert add(root, element="sky_battle", prompt="The person from the reference image in front of a sunset sky.",
-               model="image_model_x", batch="pair", refs=[photo])["id"] == "a0002"
-    other = png(root / "swap" / "rock.png")                                # not a person's image: no consent needed
+               model="image_model_x", batch="pair", refs=[photo])["id"] == "a0003"
+    other = root / swap_image(root, "rock.png", "sky_battle")             # not a person's image: no consent needed
     set_right(root, "likeness_consent", "not_applicable")
     assert add(root, element="sky_battle", prompt="A rock face like the one in the reference image.",
-               model="image_model_x", batch="pair", refs=[other])["id"] == "a0003"
+               model="image_model_x", batch="pair", refs=[other])["id"] == "a0004"
+
+
+# --- final review 2 (m3): a reference is a generated file or an image of the swap table ---
+
+def test_m3_a_photo_no_swap_entry_names_is_refused_as_unknown(assets3, capsys):
+    """Probe B: a background asset made with swap/someone.jpg under not_applicable."""
+    root = assets3.root
+    png(root / "swap" / "someone.jpg")
+    capsys.readouterr()
+    assert main(["assets", "add", str(root), "--element", "sky_battle", "--prompt", "Sunset sky behind a person.",
+                 "--model", "image_model_x", "--batch", "b", "--ref", "swap/someone.jpg"]) == 2
+    err = capsys.readouterr().err
+    assert "not an image of the swap table" in err and "cast check" in err
+    assert not assets3.assets_file.exists()
+
+
+def test_m3_a_picture_placed_by_hand_under_assets_is_refused(assets3):
+    png(assets3.root / "assets" / "hero" / "handmade.png")
+    with pytest.raises(CineRecastError, match="not a file a done asset stored"):
+        add(assets3.root, element="sky_battle", prompt="Sunset sky.", model="image_model_x", batch="b",
+            refs=[Path("assets/hero/handmade.png")])
+
+
+def test_m3_the_guided_pair_sheet_of_a_virtual_person_passes_and_is_verified(assets3, tmp_path):
+    """Probe B2 and SKILL.md's pair sheet step, all under not_applicable."""
+    from cine_recast.casting import not_applicable_holds
+
+    root = assets3.root
+    hero = generate_and_use(root, "hero", tmp_path)                        # made without reference images
+    sky = generate_and_use(root, "sky_battle", tmp_path)
+    pair = add(root, element="sky_battle", prompt="The rider from the first reference image under the sky of the "
+               "second, full side view at their true relative scale.", model="image_model_x", batch="pair",
+               refs=[Path(hero), Path(sky)])
+    set_cost(root, pair["id"], 1.0); approve(root, "pair", 1.0, "owner"); issue_next(root, "pair")
+    stored = record_done(root, pair["id"], "prov-pair", 1.0, [png(tmp_path / "pair.png")])["files"][0]
+    c = read_json(assets3.casting_file)
+    c["swaps"][1]["images"].append(stored)
+    write_json(assets3.casting_file, c)
+    assert check(root) == [] and not_applicable_holds(root) is True
+
+
+def test_m3_a_pair_sheet_made_from_a_real_person_is_not_verified(assets3, tmp_path):
+    from cine_recast.casting import not_applicable_holds
+
+    root = assets3.root
+    set_right(root, "likeness_consent", "yes")
+    photo = swap_image(root, "person.png", "hero", only=True)
+    sheet = generate_and_use(root, "hero", tmp_path, refs=[Path(photo)])   # carries the person in the photo
+    generate_and_use(root, "sky_battle", tmp_path, refs=[Path(sheet)])
+    virtual = generate_and_use(root, "hero", tmp_path)                     # the person swap becomes virtual
+    set_right(root, "likeness_consent", "not_applicable")
+    assert read_json(assets3.casting_file)["swaps"][0]["images"] == [virtual]
+    assert check(root) == [] and not_applicable_holds(root) is False      # the sky still carries the real person
+    with pytest.raises(CineRecastError, match="likeness_consent must be 'yes'"):
+        add(root, element="sky_battle", prompt="The sky again.", model="image_model_x", batch="b",
+            refs=[Path(read_json(assets3.casting_file)["swaps"][1]["images"][0])])

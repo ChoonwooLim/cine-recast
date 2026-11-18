@@ -1,3 +1,5 @@
+from cine_recast.errors import CineRecastError
+
 _HAN_RANGES = (
     (0x2E80, 0x2FDF),
     (0x3005, 0x3007),
@@ -39,6 +41,22 @@ def han_chars(text: str) -> list[str]:
         if _in(ch, _HAN_RANGES) and ch not in found:
             found.append(ch)
     return found
+
+
+def han_problem(name: str, value) -> str | None:
+    """The refusal sentence for a free text that holds Han characters, or None. `name` names the
+    text as the user gave it (a flag such as --note, or a key). Every free text a command writes into
+    a project file (batch names, --by, --note, --reason, --provider-id, labels, the project name, the
+    file names of input images) goes through this check, so the rule is the same everywhere."""
+    found = han_chars(value) if isinstance(value, str) else []
+    return f"{name} must not contain Han characters ({''.join(found)})" if found else None
+
+
+def refuse_han(name: str, value) -> None:
+    """Raise CineRecastError with han_problem's sentence when `value` holds Han characters."""
+    problem = han_problem(name, value)
+    if problem:
+        raise CineRecastError(problem)
 
 
 def is_english_prompt(text: str) -> bool:

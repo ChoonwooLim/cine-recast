@@ -31,6 +31,7 @@ from cine_recast.lifecycle import is_text, now
 from cine_recast.paths import ProjectPaths
 from cine_recast.project import load_project
 from cine_recast.takes import list_takes
+from cine_recast.textrules import refuse_han
 
 REVIEW_HEIGHT = 540
 CELL_WIDTH = 320
@@ -128,6 +129,8 @@ def confirm(root: Path, unit_id: str, take_id: str, by: str, note: str = "") -> 
         raise CineRecastError("by must name the user who confirmed the take")
     if not isinstance(note, str):
         raise CineRecastError("note must be text")
+    refuse_han("by", by)
+    refuse_han("note", note)
     plan.unit(root, unit_id)                               # an unknown or damaged unit is refused here
     data = plan.load(root)
     item = next(u for u in data["units"] if isinstance(u, dict) and u.get("id") == unit_id)

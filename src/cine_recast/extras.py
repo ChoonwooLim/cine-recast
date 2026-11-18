@@ -5,8 +5,9 @@ An extra is one video-generation call. To lead into or out of a shot it either e
 (kind "extend": the take's raw file is the video input, the result continues it before its first
 frame, "backward", or after its last frame, "forward") or starts or ends on a given picture (kind
 "shot": a frame of a take, or an image under assets/ or swap/, written as extras/<id>/start.png or
-end.png when the extra is added); reference images from assets/ or swap/ may be added. Extras live in extras.json and follow the life cycle of
-the other paid jobs (lifecycle.py) through the same ledger, as sound items do:
+end.png when the extra is added); reference images from assets/ or swap/ may be added. Extras live
+in extras.json and follow the life cycle of the other paid jobs (lifecycle.py) through the same
+ledger, as sound items do:
 
 planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (record_done, record_fail)
 
@@ -20,29 +21,42 @@ planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (rec
   records the extra as done.
 - Extra ids (x0001, ...) share the ledger with the other job ids and are never reused.
 - A take shows the swapped people, so add, set_cost and issue_next require a clean cast check.
+- Every input is checked again at add, set_cost and issue_next, by role (_input_problems): the
+  video is the raw file of a take of a planned unit, a start or end image is the file extra add
+  wrote (with the content it wrote), and every reference image and every picture a start or end
+  image was copied from passes the rule all input images share (inputs.image_problems).
+- A padded unit's take is never extended forward: the end of its raw file is held picture that is
+  not part of the film. A start or end frame named U/T:shot-first or U/T:shot-last is the first or
+  last frame conform kept, so a new clip joins the shot the user confirmed.
+- A frame of the reference video is never a start or end image (add compares the picture with
+  every frame of the reference).
 - Extras are free cuts for the user: assemble, which rebuilds the reference shot for shot, never
-  uses them.
+  uses them, and their sound is neither checked nor used.
 """
 
+import math
 import re
 import shutil
+from fractions import Fraction
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
-from cine_recast import casting, ledger, plan
+from cine_recast import casting, inputs, ledger, plan
 from cine_recast.analyze import load_video
 from cine_recast.casting import IMAGE_SUFFIXES
 from cine_recast.conform import _raw_file
+from cine_recast.cuts import HOLD_DIFF, picture_signature
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import ToolNotFound, extract_still, probe
+from cine_recast.ffmpeg import ToolNotFound, extract_still, iter_frames, probe
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch extras.IssueRefused)
-from cine_recast.lifecycle import (SENT, fail, finish, highest, is_text, issue_in_order, quote, reconcile,
-                                   require_issued, require_result, resolve, stale_quote)
-from cine_recast.paths import ProjectPaths, inside_folder, same_bytes, sha256_of
+from cine_recast.lifecycle import (SENT, batch_problem, fail, finish, highest, is_text, issue_in_order, quote,
+                                   reconcile, require_issued, require_result, resolve, stale_quote)
+from cine_recast.paths import ProjectPaths, inside_folder, refuse_project_material, same_bytes, sha256_of
 from cine_recast.project import load_project
-from cine_recast.textrules import han_chars, is_english_prompt
+from cine_recast.textrules import han_problem, is_english_prompt
 
 TOOL = "generate_video"
 DIRECTIONS = ("backward", "forward")
@@ -51,8 +65,11 @@ IMAGE_ROLES = ("start_image", "end_image", "image")
 VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm")
 _EXTRA_ID = re.compile(r"^x(\d+)$")
 _TAKE = re.compile(r"^(u\d+)/(t\d{3,})$")
-_FRAME = re.compile(r"^(u\d+)/(t\d{3,}):(first|last|\d+)$")
+_FRAME = re.compile(r"^(u\d+)/(t\d{3,}):(first|last|shot-first|shot-last|\d+)$")
+_RAW = re.compile(r"^takes/(u\d+)/(t\d{3,})/raw\.[A-Za-z0-9]+$")
 _NOUN, _QUOTE_COMMAND = "extra", "extra set-cost"
+_NOT_A_REFERENCE_FRAME = ("a frame of the reference video is never a start or end image: the model carries it into "
+                          "the new clip almost unchanged")
 
 
 # --- extras.json ---------------------------------------------------------------------------
@@ -102,6 +119,21 @@ def _inputs(item: dict) -> list[dict]:
     return [entry for entry in inputs if isinstance(entry, dict)] if isinstance(inputs, list) else []
 
 
+def _source(item: dict) -> dict:
+    return item.get("source") if isinstance(item.get("source"), dict) else {}
+
+
+def image_inputs(item: dict) -> list[str]:
+    """The images whose rights an extra needs: its reference images (role image) and the pictures
+    its start and end images were copied from (a frame of a take shows the swapped people, which
+    the cast check covers)."""
+    source = _source(item)
+    copied = [source[name] for name in ("start", "end")
+              if isinstance(source.get(name), str) and _FRAME.fullmatch(source[name]) is None]
+    return copied + [entry["path"] for entry in _inputs(item)
+                     if entry.get("role") == "image" and isinstance(entry.get("path"), str)]
+
+
 def _payload(root: Path, item: dict) -> dict:
     """The exact call for one extra: tool, parameters and absolute input paths."""
     params = item.get("params") if isinstance(item.get("params"), dict) else {}
@@ -130,15 +162,164 @@ def _cast_problems(root: Path, label: str) -> list[str]:
             + "; ".join(problems)]
 
 
-def _problems(root: Path, item: dict, models: dict[str, dict]) -> list[str]:
-    """What keeps an extra from being quoted or issued, as English sentences."""
+def _image_problem(path: Path, what: str) -> str | None:
+    """Why the file is not a readable image, or None."""
+    try:
+        with Image.open(path) as image:
+            image.load()
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+        return (f"{what}: the file cannot be read as an image ({type(exc).__name__}: {exc}); give a .jpg, .jpeg, .png "
+                "or .webp picture that opens")
+    return None
+
+
+def _ref_problem(root: Path, path_text: str, what: str) -> str | None:
+    """Why a reference image (or a picture a start or end image was copied from) cannot be used:
+    not under the project's assets/ or swap/, not an image file, missing, unreadable."""
+    pp = ProjectPaths(Path(root))
+    path = resolve(root, path_text)
+    if inside_folder(path, [pp.assets_dir, pp.swap_dir]) is None:
+        return (f"{what}: images must be generated asset files under assets/ or images under swap/ in the project "
+                "folder")
+    if path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file():
+        return f"{what}: must be an existing .jpg, .jpeg, .png or .webp file"
+    return _image_problem(path, what)
+
+
+def _unit_item(root: Path, unit_id: str) -> dict | None:
+    """The unit of the current plan with this id, else of the newest archived plan that has it."""
+    plans = []
+    if ProjectPaths(Path(root)).plan_file.is_file():
+        plans.append(plan.load(root))
+    plans += reversed(plan._archived_plans(root))
+    for data in plans:
+        units = data.get("units") if isinstance(data, dict) and isinstance(data.get("units"), list) else []
+        for item in units:
+            if isinstance(item, dict) and item.get("id") == unit_id:
+                return item
+    return None
+
+
+def _padded(root: Path, unit_id: str) -> int:
+    """The unit's pad_frames (0 when it has none or is unknown)."""
+    item = _unit_item(root, unit_id)
+    pad = item.get("pad_frames", 0) if isinstance(item, dict) else 0
+    return pad if isinstance(pad, int) and not isinstance(pad, bool) and pad > 0 else 0
+
+
+def _forward_problem(root: Path, label: str, unit_id: str, take_id: str) -> str | None:
+    pad = _padded(root, unit_id)
+    if not pad:
+        return None
+    return (f"{label}: take {unit_id}/{take_id} is not extended forward: unit {unit_id} was padded (its reference "
+            f"clip ends with {pad} copies of its last frame), so the end of the take's raw file is held picture that "
+            "is not part of the film, and the model would continue from there; start the new clip on the last frame "
+            f"of the shot instead: extra add --start {unit_id}/{take_id}:shot-last (backward extension is fine)")
+
+
+def _video_problems(root: Path, label: str, item: dict, path: str) -> list[str]:
+    """The video input of an extension is the raw file of a take of a planned unit, the take its
+    source names, and a padded take is not extended forward."""
+    match = _RAW.fullmatch(path)
+    redo = "add the extra again with extra add --extend U/T"
+    if match is None or match.group(1) not in _plan_units(root):
+        return [f"{label}: the video input {path} is not the raw file of a take of a planned unit "
+                f"(takes/<unit>/<take>/raw.*); only a take is extended, {redo}"]
+    unit_id, take_id = match.groups()
+    try:
+        raw = _raw_file(root, unit_id, take_id)
+    except CineRecastError as exc:
+        return [f"{label}: {exc.message}; {redo}"]
+    problems = []
+    if resolve(root, path) != raw.resolve():
+        problems.append(f"{label}: the video input {path} is not the raw file of take {unit_id}/{take_id}; {redo}")
+    if _source(item).get("extend") != f"{unit_id}/{take_id}":
+        problems.append(f"{label}: the video input {path} is not the take its source names "
+                        f"({_source(item).get('extend')!r}); {redo}")
+    params = item.get("params") if isinstance(item.get("params"), dict) else {}
+    if params.get("direction") == "forward":
+        problem = _forward_problem(root, label, unit_id, take_id)
+        if problem:
+            problems.append(problem)
+    return problems
+
+
+def _frame_file_problems(root: Path, label: str, item: dict, entry: dict, name: str, *, written: bool) -> list[str]:
+    """A start or end image is extras/<own id>/<name>.png, the file extra add wrote, with the content
+    it wrote (sha256 kept in the input), and its source says where it was copied from."""
+    redo = "add the extra again with extra add (a start or end frame is written only by extra add)"
+    expected = f"extras/{item.get('id')}/{name}.png"
+    source = _source(item).get(name)
+    problems = []
+    if not is_text(source):
+        problems.append(f"{label}: its {name} image has no source in extras.json; {redo}")
+    elif _FRAME.fullmatch(source) is None:
+        problem = _ref_problem(root, source, f"{label}: {source}, the picture its {name} image was copied from")
+        if problem:
+            problems.append(f"{problem}; {redo}")
+    if entry.get("path") != expected:
+        problems.append(f"{label}: its {name} image must be {expected}, the file extra add wrote, not "
+                        f"{entry.get('path')}; {redo}")
+    elif written:
+        file = resolve(root, expected)
+        if not file.is_file():
+            problems.append(f"{label}: input file not found: {expected}; {redo}")
+        elif not isinstance(entry.get("sha256"), str):
+            problems.append(f"{label}: extras.json does not record what extra add wrote as {expected} (the extra was "
+                            f"added before that record existed); {redo}")
+        elif entry.get("sha256") != sha256_of(file):
+            problems.append(f"{label}: {expected} is not the picture extra add wrote (its content changed); {redo} "
+                            "- quoting it again would send the changed picture")
+    return problems
+
+
+def _input_problems(root: Path, label: str, item: dict, *, written: bool = True) -> list[str]:
+    """What is wrong with an extra's inputs, by role, and with the rights its images need."""
+    problems: list[str] = []
+    inputs_ = item.get("inputs")
+    if not isinstance(inputs_, list) or len(_inputs(item)) != len(inputs_):
+        problems.append(f"{label}: inputs must be a list of {{role, path}} objects.")
+    roles = [entry.get("role") for entry in _inputs(item)]
+    for entry in _inputs(item):
+        role, path = entry.get("role"), entry.get("path")
+        if role not in ROLES or not is_text(path):
+            problems.append(f"{label}: every input needs a role among {', '.join(ROLES)} and a path.")
+            continue
+        if han_problem(f"input path {path}", path):
+            problems.append(f"{label}: {han_problem(f'input path {path}', path)}; rename the file without them.")
+            continue
+        if role == "video":
+            problems += _video_problems(root, label, item, path)
+        elif role in ("start_image", "end_image"):
+            problems += _frame_file_problems(root, label, item, entry, role.split("_")[0], written=written)
+        else:
+            problem = _ref_problem(root, path, f"{label}: reference image {path}")
+            if problem:
+                problems.append(problem)
+    for name in ("start", "end"):
+        if roles.count(f"{name}_image") > 1:
+            problems.append(f"{label}: more than one {name} image; add the extra again with extra add")
+        if f"{name}_image" not in roles and name in _source(item):
+            problems.append(f"{label}: its source names a {name} image but no {name}_image input exists; add the extra "
+                            "again with extra add")
+    for name, value in _source(item).items():
+        if han_problem(f"source {name}", value):
+            problems.append(f"{label}: {han_problem(f'source {name}', value)}; rename the file without them.")
+    if not problems:
+        problems += inputs.image_problems(root, image_inputs(item), label=label)
+    return problems
+
+
+def _problems(root: Path, item: dict, models: dict[str, dict], *, written: bool = True) -> list[str]:
+    """What keeps an extra from being quoted or issued, as English sentences. With written False
+    (extra add, before it writes them) the files of the start and end images are not checked."""
     label = f"extra {item['id']}" if is_text(item.get("id")) else "extra"
     problems: list[str] = []
     name = item.get("label")
     if not is_text(name):
         problems.append(f"{label}: label must be a non-empty text.")
-    elif han_chars(name):
-        problems.append(f"{label}: label must not contain Han characters ({''.join(han_chars(name))}).")
+    elif han_problem("label", name):
+        problems.append(f"{label}: {han_problem('label', name)}.")
     params = item.get("params") if isinstance(item.get("params"), dict) else {}
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not is_english_prompt(prompt):
@@ -168,14 +349,7 @@ def _problems(root: Path, item: dict, models: dict[str, dict]) -> list[str]:
             problems.append(f"{label}: direction must be backward or forward, not {params.get('direction')!r}.")
     elif item.get("kind") != "shot" or "direction" in params:
         problems.append(f"{label}: kind must be 'extend' (with a direction) or 'shot' (without one).")
-    inputs = item.get("inputs")
-    if not isinstance(inputs, list) or len(_inputs(item)) != len(inputs):
-        problems.append(f"{label}: inputs must be a list of {{role, path}} objects.")
-    for entry in _inputs(item):
-        if entry.get("role") not in ROLES or not is_text(entry.get("path")):
-            problems.append(f"{label}: every input needs a role among {', '.join(ROLES)} and a path.")
-        elif not resolve(root, entry["path"]).is_file():
-            problems.append(f"{label}: input file not found: {entry['path']}")
+    problems += _input_problems(root, label, item, written=written)
     videos = sum(1 for entry in _inputs(item) if entry.get("role") == "video")
     images = sum(1 for entry in _inputs(item) if entry.get("role") in IMAGE_ROLES)
     if videos != (1 if item.get("kind") == "extend" else 0):
@@ -187,8 +361,9 @@ def _problems(root: Path, item: dict, models: dict[str, dict]) -> list[str]:
         if images > spec["image_refs"]:
             problems.append(f"{label}: {images} input images, but model {model!r} takes at most "
                             f"{spec['image_refs']} (image_refs).")
-    if not is_text(item.get("batch")):
-        problems.append(f"{label}: batch must not be empty.")
+    problem = batch_problem(label, item.get("batch"))
+    if problem:
+        problems.append(problem)
     return problems
 
 
@@ -213,27 +388,115 @@ def _relative(root: Path, path: Path) -> str:
     return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
 
 
+def raw_frame(fitted: int, raw_rate: Fraction, film_rate: Fraction) -> int:
+    """The frame of a take's raw file that conform shows as frame `fitted` of the take fitted to the
+    film's frame rate. conform's fps filter puts raw frame k at fitted time round(k * film_rate /
+    raw_rate) (half away from zero) and shows at each fitted frame the last raw frame at or before
+    it, so fitted frame j shows the largest k with k * film_rate / raw_rate < j + 1/2. The same frame
+    when the rates are equal (a raw file of constant frame rate is assumed)."""
+    if raw_rate == film_rate:
+        return fitted
+    return math.ceil((fitted + Fraction(1, 2)) * raw_rate / film_rate) - 1
+
+
+def _shot_frame(root: Path, flag: str, unit_id: str, take_id: str, which: str, raw: Path, facts) -> int:
+    """The raw frame of U/T:shot-first or U/T:shot-last: the first or last frame conform kept for the
+    take (conform.json; for a unit of several shots the first kept frame of its first shot and the
+    last kept frame of its last), converted to a frame of the raw file when the frame rates differ."""
+    name = f"{flag} {unit_id}/{take_id}:{which}"
+    record_file = raw.parent / "conform.json"
+    if not record_file.is_file():
+        raise CineRecastError(f"{name}: take {unit_id}/{take_id} has not been conformed, so the tool does not know "
+                              "where the shot lies in its raw file; run conform for the take first (for a padded unit "
+                              f"with --take-cuts as takes cuts shows), or give a frame of the raw file as "
+                              f"{unit_id}/{take_id}:<n>")
+    record = read_project_json(Path(root), record_file, {"start_frame": int, "source_frames": int, "unit_frames": int})
+    cuts, start, total = record.get("take_cuts"), record["start_frame"], record["source_frames"]
+    if cuts is not None:
+        whole = isinstance(cuts, list) and len(cuts) >= 2 and all(
+            isinstance(v, int) and not isinstance(v, bool) for v in cuts)
+        first, last = (cuts[0], cuts[-1] - 1) if whole else (-1, -1)
+    elif record.get("retimed") is True:
+        first, last = start, total - 1
+    else:
+        first, last = start, start + record["unit_frames"] - 1
+    if not 0 <= first <= last < total:
+        raise CineRecastError(f"{name}: conform.json of take {unit_id}/{take_id} does not describe frames inside the "
+                              "take; run conform for the take again")
+    fitted = first if which == "shot-first" else last
+    info, _ = load_video(root)
+    index = raw_frame(fitted, Fraction(facts.fps_num, facts.fps_den), Fraction(info.fps_num, info.fps_den))
+    return min(max(index, 0), facts.frames - 1)
+
+
+def _rgb(path: Path, what: str) -> np.ndarray:
+    """The image as an RGB array; refused with a sentence when it cannot be read."""
+    problem = _image_problem(path, what)
+    if problem:
+        raise CineRecastError(problem)
+    with Image.open(path) as image:
+        return np.asarray(image.convert("RGB"))
+
+
+def _reference_frame_match(root: Path, rgb: np.ndarray) -> tuple[int, float] | None:
+    """(frame, difference) of the reference frame whose signature is within HOLD_DIFF of the
+    picture's, or None. The picture is compared as it is and, when it has the reference's full frame
+    size, as its picture area. Refused (fail closed) when the reference cannot be read whole."""
+    info, box = load_video(root)
+    candidates = [picture_signature(rgb)]
+    if rgb.shape[:2] == (info.height, info.width) and (box.w, box.h) != (info.width, info.height):
+        candidates.append(picture_signature(rgb[box.y:box.y + box.h, box.x:box.x + box.w]))
+    reference = Path(root) / load_project(root)["reference"]
+    read = 0
+    try:
+        for index, frame in enumerate(iter_frames(reference, crop=box.as_crop())):
+            read += 1
+            signature = picture_signature(frame)
+            difference = min(float(np.abs(candidate - signature).mean()) for candidate in candidates)
+            if difference < HOLD_DIFF:
+                return index, difference
+    except ToolNotFound:
+        raise
+    except CineRecastError as exc:
+        raise CineRecastError(f"the reference video cannot be read to check that the picture is not one of its frames "
+                              f"({exc.message}); nothing written") from exc
+    if read != info.frames:
+        raise CineRecastError(f"the reference video cannot be read to check that the picture is not one of its frames "
+                              f"(read {read} of its {info.frames} frames); nothing written")
+    return None
+
+
 def _frame_choice(root: Path, flag: str, text: str) -> tuple[str, Path, int | None]:
     """What --start or --end names: ("frame", the take's raw file, the frame index) for U/T:FRAME,
-    else ("image", the image file, None) for an image under assets/ or swap/."""
+    else ("image", the image file, None) for an image under assets/ or swap/ that is readable and is
+    not a frame of the reference."""
     match = _FRAME.fullmatch(text) if isinstance(text, str) else None
     if match is None:
         pp = ProjectPaths(Path(root))
         path = resolve(root, str(text))
-        if (inside_folder(path, [pp.assets_dir, pp.root / "swap"]) is None
+        if (inside_folder(path, [pp.assets_dir, pp.swap_dir]) is None
                 or path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file()):
-            raise CineRecastError(f"{flag} {text}: give a take frame as U/T:FRAME (for example u01/t001:first, "
-                                  "u01/t001:last or u01/t001:12) or an existing .jpg, .jpeg, .png or .webp image; "
+            raise CineRecastError(f"{flag} {text}: give a take frame as U/T:FRAME (for example u01/t001:shot-first, "
+                                  "u01/t001:shot-last or u01/t001:12) or an existing .jpg, .jpeg, .png or .webp image; "
                                   "images must be generated asset files under assets/ or images under swap/ in the "
-                                  "project folder")
+                                  f"project folder, and {_NOT_A_REFERENCE_FRAME}")
+        found = _reference_frame_match(root, _rgb(path, f"{flag} {text}"))
+        if found is not None:
+            raise CineRecastError(f"{flag} {text}: this picture is frame {found[0]} of the reference video (its 64x36 "
+                                  f"signature differs by {found[1]:.2f}, under the {HOLD_DIFF} that copies of one "
+                                  f"picture stay under); {_NOT_A_REFERENCE_FRAME}. Generate the key picture as an "
+                                  "asset (assets add, then give the stored file under assets/), or start from a take "
+                                  "with U/T:shot-first or U/T:shot-last")
         return "image", path, None
-    raw = _take_raw(root, match.group(1), match.group(2))
-    frames = probe(raw).frames
-    choice = match.group(3)
+    unit_id, take_id, choice = match.groups()
+    raw = _take_raw(root, unit_id, take_id)
+    facts = probe(raw)
+    frames = facts.frames
+    if choice in ("shot-first", "shot-last"):
+        return "frame", raw, _shot_frame(root, flag, unit_id, take_id, choice, raw, facts)
     index = 0 if choice == "first" else frames - 1 if choice == "last" else int(choice)
     if not 0 <= index < frames:
-        raise CineRecastError(f"{flag}: frame {index} is outside take {match.group(1)}/{match.group(2)} "
-                              f"(frames 0 to {frames - 1})")
+        raise CineRecastError(f"{flag}: frame {index} is outside take {unit_id}/{take_id} (frames 0 to {frames - 1})")
     return "frame", raw, index
 
 
@@ -252,14 +515,10 @@ def _write_input_image(kind: str, source: Path, index: int | None, out: Path) ->
 
 def _ref_path(root: Path, ref) -> str:
     """A reference image from the project's assets/ or swap/ folder, as a project-relative path."""
-    pp = ProjectPaths(Path(root))
-    path = resolve(root, str(ref))
-    if inside_folder(path, [pp.assets_dir, pp.root / "swap"]) is None:
-        raise CineRecastError(f"--ref {ref}: reference images must be generated asset files under assets/ or images "
-                              "under swap/ in the project folder")
-    if path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file():
-        raise CineRecastError(f"--ref {ref}: must be an existing .jpg, .jpeg, .png or .webp file")
-    return _relative(root, path)
+    problem = _ref_problem(root, str(ref), f"--ref {ref}")
+    if problem:
+        raise CineRecastError(problem)
+    return _relative(root, resolve(root, str(ref)))
 
 
 # --- the life cycle ------------------------------------------------------------------------
@@ -290,17 +549,20 @@ def add(root: Path, *, label: str, prompt: str, model: str, seconds: int, batch:
         raise CineRecastError("; ".join(problems))
     models = plan.valid_models(root)
     spec = models.get(model)
-    inputs: list[dict] = []
+    inputs_: list[dict] = []
     source: dict = {}
     if extend is not None:
         match = _TAKE.fullmatch(extend) if isinstance(extend, str) else None
         if match is None:
             raise CineRecastError(f"--extend must be U/T (for example u01/t001), not {extend!r}")
-        inputs.append({"role": "video", "path": _relative(root, _take_raw(root, match.group(1), match.group(2)))})
+        inputs_.append({"role": "video", "path": _relative(root, _take_raw(root, match.group(1), match.group(2)))})
         source = {"extend": extend, "direction": direction}
     frames = {}
     for flag, name, value in (("--start", "start", start), ("--end", "end", end)):
         if value is not None:
+            problem = han_problem(flag, value)
+            if problem:
+                raise CineRecastError(f"{problem}; rename the file without them")
             frames[name] = _frame_choice(root, flag, value)
             source[name] = value
     ref_paths = [_ref_path(root, ref) for ref in refs]
@@ -316,21 +578,26 @@ def add(root: Path, *, label: str, prompt: str, model: str, seconds: int, batch:
     xid = f"x{_next_number(root, data):04d}"
     folder = pp.extras_dir / xid
     for name in frames:
-        inputs.append({"role": f"{name}_image", "path": f"extras/{xid}/{name}.png"})
-    inputs += [{"role": "image", "path": path} for path in ref_paths]
+        inputs_.append({"role": f"{name}_image", "path": f"extras/{xid}/{name}.png"})
+    inputs_ += [{"role": "image", "path": path} for path in ref_paths]
     item = {"id": xid, "label": label, "kind": "extend" if extend is not None else "shot", "batch": batch,
-            "state": "planned", "est_credits": None, "quote_digest": None, "params": params, "inputs": inputs,
+            "state": "planned", "est_credits": None, "quote_digest": None, "params": params, "inputs": inputs_,
             "source": source, "result": None}
-    problems = [p for p in _problems(root, item, models) if "input file not found: extras/" not in p]
+    problems = _problems(root, item, models, written=False)
     if problems:
         raise CineRecastError("; ".join(problems))
+    made_extras_dir = not pp.extras_dir.exists()
     try:
         for name, (kind, path, index) in frames.items():
             _write_input_image(kind, path, index, folder / f"{name}.png")
+            entry = next(e for e in inputs_ if e["role"] == f"{name}_image")
+            entry["sha256"] = sha256_of(folder / f"{name}.png")
         data["extras"].append(item)
         _save(root, data)
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
+        if made_extras_dir:
+            shutil.rmtree(pp.extras_dir, ignore_errors=True)
         raise
     return item
 
@@ -370,10 +637,12 @@ def set_cost(root: Path, extra_id: str, credits: float) -> dict:
 def issue_next(root: Path, batch: str) -> list[dict]:
     """Hand the batch's quoted extras to the ledger in id order and return what to run for each.
 
-    Every queued extra must pass the checks of add again (casting included) and still have the
-    params and input files its quote priced, or nothing is issued. Stops with IssueRefused at the
-    first extra the ledger refuses; the extras issued before it stay issued and travel on the
-    exception.
+    Every queued extra must pass the checks of add again (casting and inputs included) and still
+    have the params and input files its quote priced, or nothing is issued; an extra whose own
+    checks fail is not also told to be quoted again (a changed start or end image is added again,
+    never quoted again). What its images carry is kept with it (sent_likeness). Stops with
+    IssueRefused at the first extra the ledger refuses; the extras issued before it stay issued and
+    travel on the exception.
     """
     root = Path(root)
     data = _load(root)
@@ -385,12 +654,13 @@ def issue_next(root: Path, batch: str) -> list[dict]:
             raise CineRecastError("no extra issued: " + "; ".join(problems))
         models = plan.valid_models(root)
         for item in queue:
-            problems += _problems(root, item, models)
-            stale = stale_quote(item, _priced(root, item), noun=_NOUN, command=_QUOTE_COMMAND)
-            if stale:
-                problems.append(stale)
+            own = _problems(root, item, models)
+            stale = None if own else stale_quote(item, _priced(root, item), noun=_NOUN, command=_QUOTE_COMMAND)
+            problems += own + ([stale] if stale else [])
         if problems:
             raise CineRecastError("extra check failed, no extra issued: " + "; ".join(problems))
+        for item in queue:
+            item["sent_likeness"] = inputs.likeness_of(root, image_inputs(item))
     runs = {item["id"]: _payload(root, item) for item in queue}
     try:
         issued = issue_in_order(root, batch, queue, lambda item: _priced(root, item), lambda: _save(root, data),
@@ -402,16 +672,11 @@ def issue_next(root: Path, batch: str) -> list[dict]:
 
 def _check_result_file(root: Path, extra_id: str, source: Path) -> None:
     """Refuse a result file that is not a downloaded generation result with a readable video."""
-    pp = ProjectPaths(root)
     if source.suffix.lower() not in VIDEO_SUFFIXES:
         raise CineRecastError(f"extra {extra_id}: result file {source} must be a .mp4, .mov, .mkv or .webm file")
     if not source.is_file():
         raise CineRecastError(f"extra {extra_id}: result file not found: {source}")
-    folder = inside_folder(source, [*pp.material_folders(), pp.sounds_dir, pp.extras_dir])
-    if folder is not None:
-        raise CineRecastError(f"extra {extra_id}: {source} is project material (inside the project's {folder.name} "
-                              "folder), not a generation result; register only files downloaded from the "
-                              "generation job")
+    refuse_project_material(root, source, f"extra {extra_id}")
     if same_bytes(source, root / load_project(root)["reference"]):
         raise CineRecastError(f"extra {extra_id}: {source} is the reference video (its bytes equal the project's "
                               "reference copy), not a generation result")

@@ -7,6 +7,9 @@ A budget line sets the project budget (the latest one counts): while one is set,
 an approval that would bring the sum of all batch limits above it. Without a budget line approve
 is bounded only by what the user approves.
 
+Free texts (batch, by, note, provider_id, reason) are refused when they hold Han characters
+(textrules.refuse_han), before anything is appended.
+
 Every writer (set_budget, approve, issue, done, fail) holds an exclusive OS lock on the sidecar file
 ledger.lock for its whole read-check-append, so two commands at the same moment cannot both pass
 a limit or issue one id twice. The operating system releases the lock when the process ends, so
@@ -25,6 +28,7 @@ from pathlib import Path
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import append_jsonl
 from cine_recast.paths import ProjectPaths
+from cine_recast.textrules import refuse_han
 
 _DECIMALS = 6  # credit sums are rounded so float noise (0.1 + 0.2) never decides a refusal
 LOCK_WAIT = 10.0  # seconds a writer waits for ledger.lock before it refuses
@@ -190,6 +194,7 @@ def _check_amount(name: str, value: float, *, positive: bool) -> float:
 def _check_text(name: str, value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise CineRecastError(f"{name} must not be empty")
+    refuse_han(name, value)
     return value
 
 
@@ -242,6 +247,7 @@ def set_budget(root: Path, limit_credits: float, by: str, note: str = "", *, loc
     """Record the project budget; it replaces any earlier one. Refused while the ledger does not validate."""
     _check_amount("limit_credits", limit_credits, positive=True)
     _check_text("by", by)
+    refuse_han("note", note)
     with locked(root, lock_wait):
         _events(root)  # a damaged ledger is repaired before anything is appended to it
         return _write(root, {"type": "budget", "time": _now(), "limit_credits": float(limit_credits),
@@ -260,6 +266,7 @@ def approve(root: Path, batch: str, limit_credits: float, by: str, note: str = "
     _check_text("batch", batch)
     _check_amount("limit_credits", limit_credits, positive=True)
     _check_text("by", by)
+    refuse_han("note", note)
     with locked(root, lock_wait):
         events = _events(root)  # a damaged ledger is repaired before anything is appended to it
         budget = _budget_status(events)

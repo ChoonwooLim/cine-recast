@@ -180,6 +180,31 @@ def png(path: Path) -> Path:
     return path
 
 
+def swap_image(root: Path, name: str, element: str, *, color: tuple[int, int, int] = (150, 120, 90),
+               only: bool = False) -> str:
+    """Write a 64x36 picture as swap/<name> and name it in the swap entry of `element` in casting.json
+    (added to its images, or its only image with `only`; a new entry when the element has none), as
+    the agent does with a picture the user gave. Returns the project-relative path."""
+    from PIL import Image
+
+    from cine_recast.jsonio import read_json, write_json
+    from cine_recast.paths import ProjectPaths
+
+    pp = ProjectPaths(Path(root))
+    path = pp.root / "swap" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 36), color).save(path)
+    relative = f"swap/{name}"
+    data = read_json(pp.casting_file)
+    entry = next((s for s in data["swaps"] if s["element"] == element), None)
+    if entry is None:
+        data["swaps"].append({"element": element, "images": [relative], "note": ""})
+    else:
+        entry["images"] = [relative] if only else [*entry["images"], relative]
+    write_json(pp.casting_file, data)
+    return relative
+
+
 def run_cli(commands: list[list]) -> None:
     """Run each command through the CLI in order (arguments may be paths); each must exit with 0."""
     from cine_recast.cli import main

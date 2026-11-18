@@ -1,7 +1,8 @@
 import shutil
+from pathlib import Path
 
 import pytest
-from conftest import generate_and_use, good_casting, png
+from conftest import generate_and_use, good_casting, png, swap_image
 
 from cine_recast.casting import check, swaps_for_shots, write_template
 from cine_recast.cli import main
@@ -85,11 +86,12 @@ def test_not_applicable_consent_needs_every_person_image_generated(assets3, tmp_
 
 
 def test_a_person_generated_from_reference_images_needs_likeness_consent(assets3, tmp_path):
-    ref = png(tmp_path / "ref.png")
-    generate_and_use(assets3.root, "sky_battle", tmp_path, refs=[ref])  # refs stay fine for a background
+    sky = swap_image(assets3.root, "sky.png", "sky_battle")             # the user's pictures, in the swap table
+    generate_and_use(assets3.root, "sky_battle", tmp_path, refs=[Path(sky)])  # refs stay fine for a background
     assert check(assets3.root) == []
     set_right(assets3.root, "likeness_consent", "yes")                  # the asset itself needs consent
-    generate_and_use(assets3.root, "hero", tmp_path, refs=[ref])
+    photo = swap_image(assets3.root, "person.png", "hero")
+    generate_and_use(assets3.root, "hero", tmp_path, refs=[Path(photo)])
     set_right(assets3.root, "likeness_consent", "not_applicable")       # answer changed afterwards
     assert any("likeness_consent" in p and "reference images" in p for p in check(assets3.root))
     set_right(assets3.root, "likeness_consent", "yes")

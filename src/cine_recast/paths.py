@@ -3,6 +3,8 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
+from cine_recast.errors import CineRecastError
+
 
 def inside_folder(path: Path, folders: Iterable[Path]) -> Path | None:
     """The first of `folders` that `path` is or lies inside, or None.
@@ -148,7 +150,39 @@ class ProjectPaths:
     def soundtrack_record(self) -> Path:
         return self.out_dir / "soundtrack.json"
 
+    @property
+    def swap_dir(self) -> Path:
+        return self.root / "swap"
+
     def material_folders(self) -> list[Path]:
-        """The folders that hold the reference, what the tool made from it, and the stored results:
-        a file inside one of them is never a new generation result."""
-        return [self.reference_dir, self.analysis_dir, self.takes_dir, self.out_dir, self.assets_dir]
+        """The folders that hold the reference, what the tool made from it, the stored results and
+        the images the user gave: a file inside one of them is never a new generation result."""
+        return [self.reference_dir, self.analysis_dir, self.takes_dir, self.out_dir, self.assets_dir,
+                self.sounds_dir, self.extras_dir, self.swap_dir]
+
+
+def material_folder(root: Path, path: Path) -> Path | None:
+    """The project folder among ProjectPaths.material_folders that `path` lies in, or None.
+
+    Both sides are resolved first (links and ".." followed) and compared case-insensitively on
+    every system, so another spelling of a project folder is still that folder.
+    """
+    def comparable(item: Path) -> str:
+        return os.path.normcase(str(Path(item).resolve())).casefold()
+
+    target = comparable(path)
+    for folder in ProjectPaths(Path(root)).material_folders():
+        base = comparable(folder)
+        if target == base or target.startswith(base.rstrip("\\/") + os.sep):
+            return folder
+    return None
+
+
+def refuse_project_material(root: Path, path: Path, label: str) -> None:
+    """Refuse a file given as a generation result that is project material: inside the project's
+    reference/, analysis/, takes/, out/, assets/, sounds/, extras/ or swap/ folder. One guard for
+    jobs done, assets done, sound done and extra done, so their folder lists cannot drift apart."""
+    folder = material_folder(root, path)
+    if folder is not None:
+        raise CineRecastError(f"{label}: {path} is project material (inside the project's {folder.name} folder), "
+                              "not a generation result; register only files downloaded from the generation job")

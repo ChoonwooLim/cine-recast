@@ -33,9 +33,9 @@ from cine_recast.jsonio import read_json, read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch plan.IssueRefused)
 from cine_recast.lifecycle import (SENT, UNISSUED, fail, finish, highest, is_number, is_text, issue_in_order, now,
                                    quote, reconcile, require_issued, require_result, resolve, stale_quote)
-from cine_recast.paths import ProjectPaths, inside_folder, same_bytes
+from cine_recast.paths import ProjectPaths, refuse_project_material, same_bytes
 from cine_recast.project import load_project
-from cine_recast.textrules import is_english_prompt
+from cine_recast.textrules import is_english_prompt, refuse_han
 
 METHODS = ("edit", "regen")
 QUALITIES = ("draft", "final")
@@ -405,6 +405,7 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         raise CineRecastError(f"unknown quality {quality!r}; expected one of {', '.join(QUALITIES)}")
     if not is_text(batch):
         raise CineRecastError("batch must not be empty")
+    refuse_han("batch", batch)
     if max_unit_seconds is not None and (not is_number(max_unit_seconds) or max_unit_seconds <= 0):
         raise CineRecastError(f"max_unit_seconds must be a number greater than 0: {max_unit_seconds!r}")
     if per_shot and max_unit_seconds is not None:
@@ -596,6 +597,31 @@ def refresh_unit(root: Path, unit_id: str, *, model: str | None = None, method: 
     return item
 
 
+def _clip_problem(root: Path, item: dict, label: str) -> str | None:
+    """Why an edit unit's reference clip is not its frames plus pad_frames (a run of plan unit
+    stopped between writing the clip and saving plan.json leaves such a clip), or None. A missing
+    clip is reported as a missing input file; a malformed start, end or pad_frames elsewhere."""
+    frames = item.get("end", 0) - item.get("start", 0) if all(
+        isinstance(item.get(k), int) and not isinstance(item.get(k), bool) for k in ("start", "end")) else 0
+    if frames <= 0 or _pad_problem(item, label):
+        return None
+    pad = item.get("pad_frames", 0)
+    clip = ProjectPaths(Path(root)).unit_dir(item["id"]) / "ref.mp4"
+    if not clip.is_file():
+        return None
+    try:
+        got = probe(clip).frames
+    except ToolNotFound:
+        raise
+    except CineRecastError:
+        got = None
+    if got == frames + pad:
+        return None
+    found = "cannot be read" if got is None else f"has {got} frames"
+    return (f"{label}: its reference clip {clip.relative_to(root).as_posix()} {found}, not the unit's {frames} frames "
+            f"plus pad_frames {pad}; write it again with plan unit <project> --unit {item['id']}")
+
+
 def _clip_has(clip: Path, frames: int) -> bool:
     """True when the clip exists and has exactly `frames` frames (an unreadable clip has not)."""
     if not clip.is_file():
@@ -715,6 +741,10 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
                                     f"give now ({', '.join(e['path'] for e in expected)}); bring this unit up to "
                                     f"date with plan unit <project> --unit {item['id']} (plan build --replace "
                                     "rebuilds every unit, with new unit ids)")
+        if method == "edit" and not shape:
+            problem = _clip_problem(root, item, label)
+            if problem:
+                problems.append(problem)
         if not models:
             continue  # models.json problems are already listed
         spec = models.get(item.get("model"))
@@ -774,6 +804,7 @@ def add_job(root: Path, unit_id: str, batch: str, quality: str) -> dict:
         raise CineRecastError(f"unknown quality {quality!r}; expected one of {', '.join(QUALITIES)}")
     if not is_text(batch):
         raise CineRecastError("batch must not be empty")
+    refuse_han("batch", batch)
     job = _new_job(f"j{_next_job_number(root, data):04d}", unit_id, batch, quality)
     data["jobs"].append(job)
     _save(root, data)
@@ -850,8 +881,9 @@ def _job_has_take(root: Path, unit_id: str, job_id: str) -> bool:
 def record_done(root: Path, job_id: str, provider_id: str, credits: float, file: Path) -> dict:
     """Store the returned file as a new take, record the job as done in the ledger, then save.
 
-    A file inside the project's reference/, analysis/, takes/, out/ or assets/ folder is refused: it
-    is project material, not a generation result; so is a file whose bytes equal the reference copy
+    A file inside the project's reference/, analysis/, takes/, out/, assets/, sounds/, extras/ or
+    swap/ folder is refused (paths.refuse_project_material): it is project material, not a
+    generation result; so is a file whose bytes equal the reference copy
     (the original file given to init). A unit with an invalid id, shots or qc_skip is refused before
     anything is stored. If the ledger refuses, the take folder made by this call is removed, so a
     refused call leaves nothing behind.
@@ -873,12 +905,7 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     source = Path(file)
     if not source.is_file():
         raise CineRecastError(f"job {job_id}: result file not found: {source}")
-    pp = ProjectPaths(root)
-    folder = inside_folder(source, [*pp.material_folders(), pp.extras_dir])
-    if folder is not None:
-        raise CineRecastError(f"job {job_id}: {source} is project material (inside the project's {folder.name} "
-                              "folder), not a generation result; register only files downloaded from the "
-                              "generation job")
+    refuse_project_material(root, source, f"job {job_id}")
     if same_bytes(source, root / load_project(root)["reference"]):
         raise CineRecastError(f"job {job_id}: {source} is the reference video (its bytes equal the project's "
                               "reference copy), not a generation result; register only files downloaded from the "

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from cine_recast import ledger
 from cine_recast.errors import CineRecastError
+from cine_recast.textrules import han_problem
 
 UNISSUED = ("planned", "quoted")          # states in which an entry has not been handed to the ledger
 SENT = ("issued", "done", "failed")       # states in which an entry's payload has been sent
@@ -155,6 +156,9 @@ def require_result(entry: dict, provider_id: str, credits: float, *, noun: str) 
     """Refuse a result without a provider id or with credits that are not a finite number of at least 0."""
     if not is_text(provider_id):
         raise CineRecastError(f"{noun} {entry.get('id')}: provider_id must not be empty")
+    problem = han_problem("provider_id", provider_id)
+    if problem:
+        raise CineRecastError(f"{noun} {entry.get('id')}: {problem}")
     if not is_number(credits) or credits < 0:
         raise CineRecastError(f"{noun} {entry.get('id')}: credits must be a finite number of at least 0: {credits!r}")
 
@@ -173,6 +177,14 @@ def finish(root: Path, entry: dict, provider_id: str, credits: float, undo: Call
         raise
     entry["state"] = "done"
     save()
+
+
+def batch_problem(label: str, batch) -> str | None:
+    """Why an entry's batch cannot be used (empty, or holding Han characters), or None."""
+    if not is_text(batch):
+        return f"{label}: batch must not be empty."
+    problem = han_problem("batch", batch)
+    return f"{label}: {problem}." if problem else None
 
 
 def fail(root: Path, entry: dict, reason: str, credits: float, save: Callable[[], None], *, noun: str) -> dict:

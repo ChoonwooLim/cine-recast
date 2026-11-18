@@ -169,6 +169,7 @@ def _reference_copy(pp, clip, tmp):
     (lambda pp, clip, tmp: make_tone(pp.root / "assets" / "t.wav", 2), "assets folder"),
     (lambda pp, clip, tmp: make_tone(pp.root / "Sounds" / "s0002.wav", 2), "sounds folder"),
     (lambda pp, clip, tmp: make_tone(pp.root / "extras" / "x0001" / "t.wav", 2), "extras folder"),
+    (lambda pp, clip, tmp: make_tone(pp.root / "swap" / "voice.wav", 2), "swap folder"),
 ])
 def test_done_refusals_leave_nothing(sound3, clip3, tmp_path, make, fragment):
     root = sound3.root

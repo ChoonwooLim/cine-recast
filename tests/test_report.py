@@ -1,4 +1,6 @@
-from conftest import generate_and_use, png, write_models
+from pathlib import Path
+
+from conftest import generate_and_use, png, swap_image, write_models
 
 from cine_recast.assemble import assemble
 from cine_recast.jsonio import read_json, write_json
@@ -121,19 +123,36 @@ def test_report_shows_who_confirmed_each_unit(finished3):
     assert "- \uc0ac\uc6a9\uc790\uac00 \ud655\uc778\ud558\uc9c0 \uc54a\uc740 \ub2e8\uc704: u01" in _open_items(text)
 
 
-def test_a_pair_sheet_made_from_a_person_is_not_verified_as_not_applicable(assets3, tmp_path):
+def test_a_pair_sheet_of_a_virtual_person_is_verified_as_not_applicable(assets3, tmp_path):
+    """Final review 2 (m3): a pair sheet made only from a virtual person keeps "not_applicable"
+    verified; one made from a person generated from a photo does not."""
     from cine_recast import assets, ledger
     from cine_recast.casting import check, not_applicable_holds
     from cine_recast.project import set_right
 
     root = assets3.root
     hero = generate_and_use(root, "hero", tmp_path)                       # virtual, made without references
-    set_right(root, "likeness_consent", "yes")
     pair = assets.add(root, element="sky_battle", prompt="The rider from the reference image under a sunset sky.",
                       model="image_model_x", batch="pair", refs=[root / hero])
     assets.set_cost(root, pair["id"], 1.0); ledger.approve(root, "pair", 1.0, "owner"); assets.issue_next(root, "pair")
     stored = assets.record_done(root, pair["id"], "prov-pair", 1.0, [png(tmp_path / "pair.png")])["files"][0]
     assets.use(root, "sky_battle", stored)
+    assert check(root) == [] and not_applicable_holds(root) is True
+    write_models(root)
+    build(root, model="seedance_2_5", method="edit", batch="b")
+    assert "\ub3c4\uad6c \ud655\uc778" in _rights_line(root, "likeness_consent")
+
+
+def test_a_pair_sheet_made_from_a_person_is_not_verified_as_not_applicable(assets3, tmp_path):
+    from cine_recast.casting import check, not_applicable_holds
+    from cine_recast.project import set_right
+
+    root = assets3.root
+    set_right(root, "likeness_consent", "yes")
+    photo = swap_image(root, "person.png", "hero", only=True)
+    sheet = generate_and_use(root, "hero", tmp_path, refs=[Path(photo)])   # a person generated from a photo
+    generate_and_use(root, "sky_battle", tmp_path, refs=[root / sheet])
+    generate_and_use(root, "hero", tmp_path)                               # the person swap becomes virtual
     set_right(root, "likeness_consent", "not_applicable")
     assert check(root) == [] and not_applicable_holds(root) is False
     write_models(root)

@@ -9,6 +9,7 @@ from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import ToolNotFound, stream_facts
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.paths import ProjectPaths
+from cine_recast.textrules import refuse_han
 
 RIGHTS_ITEMS = ("reference_rights", "likeness_consent", "background_rights")
 RIGHT_ANSWERS = ("yes", "no", "unknown", "not_applicable")
@@ -69,6 +70,7 @@ def init_project(root: Path, reference: Path, name: str) -> ProjectPaths:
     The reference is probed first (reference_problem); a refusal leaves nothing behind.
     """
     root, reference = Path(root), Path(reference)
+    refuse_han("name", name)
     if not reference.is_file():
         raise CineRecastError(f"reference video not found: {reference}")
     if root.exists() and (not root.is_dir() or any(root.iterdir())):
@@ -101,6 +103,7 @@ def set_right(root: Path, item: str, answer: str, note: str = "") -> None:
         raise CineRecastError(f"unknown rights item: {item}; expected one of {', '.join(RIGHTS_ITEMS)}")
     if answer not in RIGHT_ANSWERS:
         raise CineRecastError(f"unknown answer: {answer}; expected one of {', '.join(RIGHT_ANSWERS)}")
+    refuse_han("note", note)
     data = load_project(root)
     data["rights"][item] = {"answer": answer, "note": note, "answered_at": _now()}
     write_json(ProjectPaths(Path(root)).project_file, data)

@@ -695,6 +695,8 @@ def _issued_job(pp):
     lambda pp: _copy_into(pp, "takes"),
     lambda pp: _copy_into(pp, "out"),
     lambda pp: _copy_into(pp, "assets"),
+    lambda pp: _copy_into(pp, "sounds"),                                           # final review 2 (m2)
+    lambda pp: _copy_into(pp, "Swap"),
 ])
 def test_jobs_done_refuses_project_material(planned3, make, capsys):
     _issued_job(planned3)
@@ -993,7 +995,13 @@ def test_check_refuses_a_bad_pad_frames(planned3, value):
 
 
 def test_check_accepts_a_plan_without_pad_frames(planned3):
+    from cine_recast.analyze import load_video
+    from cine_recast.ffmpeg import cut_frames
+
     _edit_unit(planned3, lambda u: u.pop("pad_frames"))                # a plan built before the key existed
+    _, box = load_video(planned3.root)                                 # and its clip, built before padding existed
+    cut_frames(planned3.root / "reference" / "source.mp4", 0, 90, planned3.unit_dir("u01") / "ref.mp4",
+               crop=box.as_crop())
     assert check(planned3.root) == []
 
 
@@ -1267,3 +1275,24 @@ def test_jobs_done_refuses_a_file_from_the_extras_folder(planned3, result_clip, 
     assert main(["jobs", "done", str(root), "--job", "j0001", "--provider-id", "p", "--credits", "1",
                  "--file", str(inside)]) == 2
     assert "extras folder" in capsys.readouterr().err
+
+
+# --- final review 2 (residual of the earlier I2): plan check compares the reference clip with its padding ---
+
+def test_plan_check_reports_a_reference_clip_without_its_padding(planned3, capsys):
+    from cine_recast.analyze import load_video
+    from cine_recast.ffmpeg import cut_frames
+
+    root = planned3.root
+    assert read_json(planned3.plan_file)["units"][0]["pad_frames"] == 6 and check(root) == []
+    _, box = load_video(root)
+    clip = planned3.unit_dir("u01") / "ref.mp4"
+    cut_frames(root / "reference" / "source.mp4", 0, 90, clip, crop=box.as_crop())   # the frames, no padding
+    problems = check(root)
+    assert any("u01" in p and "90 frames" in p and "pad_frames 6" in p and "plan unit" in p for p in problems)
+    set_cost(root, "j0001", 10.0); approve(root, "b", 10.0, "owner")
+    with pytest.raises(CineRecastError, match="plan unit"):
+        issue_next(root, "b")
+    capsys.readouterr()
+    assert main(["plan", "unit", str(root), "--unit", "u01"]) == 0                  # the remedy heals it
+    assert check(root) == []

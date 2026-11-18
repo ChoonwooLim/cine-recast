@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import VideoInfo, iter_frames
@@ -36,6 +37,16 @@ class Shot:
 def _mad(a: np.ndarray, b: np.ndarray) -> float:
     """Mean absolute pixel difference of two signatures."""
     return float(np.abs(a - b).mean())
+
+
+def picture_signature(rgb: np.ndarray) -> np.ndarray:
+    """A decoded RGB picture reduced to the SIG_SIZE gray signature (int16), the way a still or a
+    frame copied into an image file can be compared with the frames of a video: both sides are
+    decoded RGB first and reduced the same way (luma, area average), so an exact PNG copy of a frame
+    compares at 0 and a JPEG copy stays under HOLD_DIFF. _signatures, which reduces inside ffmpeg
+    straight from the video's own colour format, would put the same frame about 0.6 apart."""
+    return np.asarray(Image.fromarray(np.ascontiguousarray(rgb, dtype=np.uint8)).convert("L")
+                      .resize(SIG_SIZE, Image.BOX)).astype(np.int16)
 
 
 def _signatures(path: Path, box: PictureBox) -> Iterator[np.ndarray]:

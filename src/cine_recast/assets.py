@@ -22,17 +22,17 @@ import re
 import shutil
 from pathlib import Path
 
-from cine_recast import casting, ledger
+from cine_recast import casting, inputs, ledger
 from cine_recast.analyze import load_video
 from cine_recast.casting import ID_PATTERN, IMAGE_SUFFIXES
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import read_project_json, write_json
-from cine_recast.lifecycle import (SENT, digest, fail, finish, highest, is_text, issue_in_order, quote, reconcile,
-                                   require_issued, require_result, resolve, stale_quote)
-from cine_recast.paths import ProjectPaths, inside_folder
+from cine_recast.lifecycle import (SENT, batch_problem, digest, fail, finish, highest, is_text, issue_in_order, quote,
+                                   reconcile, require_issued, require_result, resolve, stale_quote)
+from cine_recast.paths import ProjectPaths, refuse_project_material
 from cine_recast.plan import closest_aspect, valid_models
 from cine_recast.project import load_project
-from cine_recast.textrules import is_english_prompt
+from cine_recast.textrules import han_problem, is_english_prompt
 
 TOOL = "generate_image"
 MAX_COUNT = 4
@@ -106,25 +106,23 @@ def _payload(root: Path, asset: dict) -> dict:
 def _rights_problems(root: Path, label: str, element: dict | None, refs: list) -> list[str]:
     """The rights an asset with reference images needs, read now: the element's kind comes from
     casting.json as it is at this moment, the answers from project.json. A person needs
-    likeness_consent "yes" (the result carries the likeness of whoever is in the references), and so
-    does an asset of any element whose references show a person element (a file generated for that
-    person or a person's swap image, casting.person_refs); a background needs an answered
-    background_rights, as a background swap does."""
+    likeness_consent "yes" (the result carries the likeness of whoever is in the references); a
+    background needs an answered background_rights, as a background swap does. Every reference
+    image must also pass the rule all input images share (inputs.image_problems): a generated file
+    or an image of the swap table, and the consent the likeness it carries needs, whatever the
+    element of the asset is."""
     kind = element.get("kind") if isinstance(element, dict) else None
     rights = load_project(root).get("rights") or {}
+    problems = []
     if kind == "person" and casting.answer(rights, "likeness_consent") != "yes":
-        return [f"{label}: element {element['id']!r} is a person and the asset has reference images, so the result "
-                "carries the likeness of the people in them; likeness_consent must be 'yes', record it with: "
-                "rights set --item likeness_consent --answer yes"]
-    shown = casting.person_refs(root, [ref for ref in refs if isinstance(ref, str)])
-    if shown and casting.answer(rights, "likeness_consent") != "yes":
-        return [f"{label}: the reference image(s) {', '.join(shown)} show a person element, so the result carries "
-                "that person's likeness whatever the element it belongs to; likeness_consent must be 'yes', record "
-                "it with: rights set --item likeness_consent --answer yes"]
+        problems.append(f"{label}: element {element['id']!r} is a person and the asset has reference images, so the "
+                        "result carries the likeness of the people in them; likeness_consent must be 'yes', record it "
+                        "with: rights set --item likeness_consent --answer yes")
+    problems += inputs.image_problems(root, refs, label=label)
     if kind == "background" and casting.answer(rights, "background_rights") is None:
-        return [f"{label}: element {element['id']!r} is a background and the asset has reference images, but "
-                "background_rights is not answered; record it with: rights set --item background_rights"]
-    return []
+        problems.append(f"{label}: element {element['id']!r} is a background and the asset has reference images, but "
+                        "background_rights is not answered; record it with: rights set --item background_rights")
+    return problems
 
 
 def _problems(root: Path, asset: dict, models: dict[str, dict], elements: dict[str, dict]) -> list[str]:
@@ -167,15 +165,18 @@ def _problems(root: Path, asset: dict, models: dict[str, dict], elements: dict[s
         for ref in refs:
             if not is_text(ref) or Path(ref).suffix.lower() not in IMAGE_SUFFIXES:
                 problems.append(f"{label}: ref {ref!r} must be a .jpg, .jpeg, .png or .webp file.")
+            elif han_problem(f"ref {ref}", ref):
+                problems.append(f"{label}: {han_problem(f'ref {ref}', ref)}; rename the file without them.")
             elif not resolve(root, ref).is_file():  # a relative path is relative to the project folder
                 problems.append(f"{label}: ref image not found: {ref}")
         if spec is not None and len(refs) > spec["image_refs"]:
             problems.append(f"{label}: {len(refs)} ref images, but model {model!r} takes at most "
                             f"{spec['image_refs']} (image_refs).")
-        if refs:
+        if refs and not any(f"{label}: ref" in problem for problem in problems):
             problems += _rights_problems(root, label, elements.get(element) if isinstance(element, str) else None, refs)
-    if not is_text(asset.get("batch")):
-        problems.append(f"{label}: batch must not be empty.")
+    problem = batch_problem(label, asset.get("batch"))
+    if problem:
+        problems.append(problem)
     return problems
 
 
@@ -273,6 +274,9 @@ def issue_next(root: Path, batch: str) -> list[dict]:
                 problems.append(stale)
         if problems:
             raise CineRecastError("asset check failed, no asset issued: " + "; ".join(problems))
+        for asset in queue:     # what the reference images carry when they are sent, kept with the sent params
+            refs = asset.get("refs") if isinstance(asset.get("refs"), list) else []
+            asset["sent_likeness"] = inputs.likeness_of(root, refs)
     return issue_in_order(root, batch, queue, lambda asset: _payload(root, asset), lambda: _save(root, data),
                           noun=_NOUN, command=_QUOTE_COMMAND)
 
@@ -290,9 +294,10 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
     """Store the returned images as assets/<element>/<id>_<n><suffix>, record the asset as done in
     the ledger, then save. Returns {"asset", "files"} with the stored files relative to the project.
 
-    A file inside the project's reference/, analysis/, takes/, out/ or assets/ folder is refused: it
-    is project material (a frame of the reference, or an image already stored under another asset),
-    not a generation result. The files of an asset the ledger records as done are never replaced.
+    A file inside the project's reference/, analysis/, takes/, out/, assets/, sounds/, extras/ or
+    swap/ folder is refused (paths.refuse_project_material): it is project material (a frame of the
+    reference, an image already stored under another asset, a picture the user gave), not a
+    generation result. The files of an asset the ledger records as done are never replaced.
     While the ledger does not record it as done, files already named for this asset id are leftovers
     of an interrupted call (a hard stop after storing them, before ledger.done): they are removed and
     the files given now are stored. The stored files are listed in assets.json before the ledger
@@ -315,11 +320,7 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
             raise CineRecastError(f"asset {asset_id}: result file {source} must be a .jpg, .jpeg, .png or .webp file")
         if not source.is_file():
             raise CineRecastError(f"asset {asset_id}: result file not found: {source}")
-        folder = inside_folder(source, pp.material_folders())
-        if folder is not None:
-            raise CineRecastError(f"asset {asset_id}: result file {source} is project material (inside the project's "
-                                  f"{folder.name} folder), not a generation result; register only files downloaded "
-                                  "from the generation job")
+        refuse_project_material(root, source, f"asset {asset_id}")
     if ledger.job_states(root).get(asset_id) == "done":
         raise CineRecastError(f"asset {asset_id} is done in the ledger; its stored files are never replaced")
     folder = pp.asset_dir(element)
@@ -370,7 +371,7 @@ def record_fail(root: Path, asset_id: str, reason: str, credits: float = 0.0) ->
 
 # --- generated files and the swap table ----------------------------------------------------
 
-def _sent_without_refs(asset: dict) -> bool:
+def sent_without_refs(asset: dict) -> bool:
     """True when the asset lists no refs and was sent with none.
 
     The quote digest binds what was sent at issue (the sent params and the medias), so it must match
@@ -381,24 +382,36 @@ def _sent_without_refs(asset: dict) -> bool:
             and asset.get("quote_digest") == digest({"params": sent, "medias": []}))
 
 
-def _stored_files(root: Path, element: str, *, ref_free: bool) -> list[str]:
-    """Files of the element's assets that the ledger records as done (a "done" written into
-    assets.json alone does not count), optionally only of assets sent without refs."""
+def _done_files(root: Path) -> list[tuple[str, dict]]:
+    """(stored file, asset) for every file of every asset the ledger records as done (a "done"
+    written into assets.json alone does not count), in asset order. Only files that exist under the
+    names record_done gives (assets/<element>/<id>_<n><suffix>) count."""
     root = Path(root)
-    folder = ProjectPaths(root).asset_dir(element).relative_to(root).as_posix()
     suffixes = "|".join(re.escape(suffix) for suffix in IMAGE_SUFFIXES)
-    found: list[str] = []
     states = ledger.job_states(root)
-    done = [a for a in _load(root)["assets"]
-            if isinstance(a, dict) and a.get("element") == element and states.get(a.get("id")) == "done"
-            and (not ref_free or _sent_without_refs(a))]
+    found: list[tuple[str, dict]] = []
+    done = [a for a in _load(root)["assets"] if isinstance(a, dict) and states.get(a.get("id")) == "done"]
     for asset in sorted(done, key=_number):
-        aid = asset.get("id")
-        if not isinstance(aid, str) or not _ASSET_ID.fullmatch(aid) or not isinstance(asset.get("files"), list):
+        aid, element = asset.get("id"), asset.get("element")
+        if (not isinstance(aid, str) or not _ASSET_ID.fullmatch(aid) or not isinstance(element, str)
+                or not ID_PATTERN.fullmatch(element) or not isinstance(asset.get("files"), list)):
             continue
+        folder = ProjectPaths(root).asset_dir(element).relative_to(root).as_posix()
         name = re.compile(rf"{re.escape(folder)}/{re.escape(aid)}_[1-9][0-9]*({suffixes})")
-        found += [f for f in asset["files"] if isinstance(f, str) and name.fullmatch(f) and (root / f).is_file()]
+        found += [(f, asset) for f in asset["files"]
+                  if isinstance(f, str) and name.fullmatch(f) and (root / f).is_file()]
     return found
+
+
+def stored_assets(root: Path) -> dict[str, dict]:
+    """Every stored file of a done asset (relative to the project folder) and its asset."""
+    return dict(_done_files(root))
+
+
+def _stored_files(root: Path, element: str, *, ref_free: bool) -> list[str]:
+    """Files of the element's done assets, optionally only of assets sent without refs."""
+    return [name for name, asset in _done_files(root)
+            if asset.get("element") == element and (not ref_free or sent_without_refs(asset))]
 
 
 def generated_files(root: Path, element: str) -> list[str]:

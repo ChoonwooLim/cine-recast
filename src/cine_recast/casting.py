@@ -1,14 +1,12 @@
 """Elements that appear in the shots, and the swap table that says which of them are replaced."""
 
-import json
-import os
 import re
 from pathlib import Path
 
 from cine_recast.analyze import load_shots
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import read_project_json, write_json
-from cine_recast.paths import ProjectPaths, inside_folder
+from cine_recast.paths import ProjectPaths
 from cine_recast.project import load_project
 from cine_recast.textrules import han_chars, is_english_prompt
 
@@ -212,65 +210,15 @@ def check(root: Path) -> list[str]:
     return problems
 
 
-def _same_file_key(root: Path, path) -> str:
-    return os.path.normcase(str((Path(root) / str(path)).resolve()))
-
-
-def person_refs(root: Path, refs, data=None) -> list[str]:
-    """The refs that show a person element of casting.json: a file under assets/<person element>/
-    (generated for that person) or an image of a person element's swap. Read leniently."""
-    root = Path(root)
-    if data is None:
-        try:
-            data = load(root)
-        except CineRecastError:
-            return []
-    if not isinstance(data, dict):
-        return []
-    elements = data.get("elements") if isinstance(data.get("elements"), list) else []
-    persons = {e["id"] for e in elements if isinstance(e, dict) and e.get("kind") == "person"
-               and isinstance(e.get("id"), str) and ID_PATTERN.fullmatch(e["id"])}
-    swaps = data.get("swaps") if isinstance(data.get("swaps"), list) else []
-    person_images = {_same_file_key(root, image) for swap in swaps
-                     if isinstance(swap, dict) and swap.get("element") in persons and isinstance(swap.get("images"), list)
-                     for image in swap["images"] if isinstance(image, str)}
-    folders = [root / "assets" / person for person in persons]
-    found = []
-    for ref in refs:
-        if not isinstance(ref, str):
-            continue
-        if _same_file_key(root, ref) in person_images or inside_folder(root / ref, folders) is not None:
-            found.append(ref)
-    return found
-
-
-def _swap_made_from_a_person(root: Path, data: dict) -> bool:
-    """True when a swap image of any element is a generated asset whose reference images show a
-    person element (person_refs): it carries that person's likeness, whatever the element is."""
-    try:
-        assets = json.loads((Path(root) / "assets.json").read_text(encoding="utf-8-sig")).get("assets")
-    except (OSError, ValueError, AttributeError):
-        return False
-    by_file = {}
-    for asset in assets if isinstance(assets, list) else []:
-        if isinstance(asset, dict) and isinstance(asset.get("files"), list):
-            for name in asset["files"]:
-                if isinstance(name, str):
-                    by_file[_same_file_key(root, name)] = asset
-    for swap in data["swaps"]:
-        for image in swap.get("images") or [] if isinstance(swap, dict) else []:
-            asset = by_file.get(_same_file_key(root, image)) if isinstance(image, str) else None
-            refs = asset.get("refs") if isinstance(asset, dict) else None
-            if isinstance(refs, list) and person_refs(root, refs, data):
-                return True
-    return False
-
-
 def not_applicable_holds(root: Path) -> bool:
-    """True when likeness_consent "not_applicable" is verified for casting.json as it is now: every
+    """True when likeness_consent "not_applicable" is verified for the project as it is now: every
     image of every person swap is a file this project generated for that element without reference
-    images (also when no person is replaced), and no swap image of any element is a generated asset
-    made from a person's images. False when casting.json cannot be read or checked."""
+    images (also when no person is replaced), and no image the film or an extra is made from may
+    carry a real person (inputs.likeness_verified: no swap image of any element, and no image input
+    of an issued or done extra, traces back to a person's photo or to a picture the tool cannot
+    trace). False when casting.json cannot be read or checked."""
+    from cine_recast.inputs import likeness_verified  # inputs imports this module
+
     try:
         data = load(root)
     except CineRecastError:
@@ -282,7 +230,7 @@ def not_applicable_holds(root: Path) -> bool:
     images = [(swap["element"], image) for swap in data["swaps"]
               if isinstance(swap, dict) and isinstance(swap.get("element"), str) and swap["element"] in persons
               and isinstance(swap.get("images"), list) for image in swap["images"]]
-    return _virtual_person_problem(Path(root), images) is None and not _swap_made_from_a_person(Path(root), data)
+    return _virtual_person_problem(Path(root), images) is None and likeness_verified(Path(root))
 
 
 def swapped_shots(root: Path, kind: str) -> set[int]:

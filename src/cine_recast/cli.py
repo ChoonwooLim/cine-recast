@@ -534,7 +534,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "else the model's first)")
     assets_add.add_argument("--count", type=int, default=1, help=f"images to generate, 1 to {assets.MAX_COUNT}")
     assets_add.add_argument("--ref", action="append",
-                            help="reference image (repeatable; a relative path is relative to the project folder)")
+                            help="reference image: a generated file under assets/ or an image the swap table names "
+                                 "(repeatable; a relative path is relative to the project folder)")
     assets_add.set_defaults(func=_cmd_assets_add)
     assets_list = assets_sub.add_parser("list", help="print the assets and the params each is sent with, as JSON")
     assets_list.add_argument("project", help="project folder")
@@ -648,11 +649,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="backward: the new clip ends where the take begins; forward: it starts where the "
                                 "take ends")
     extra_add.add_argument("--start", default=None, help="first frame of the new clip: a take frame U/T:FRAME (FRAME "
-                                                         "is first, last or a frame number of the take's raw file) "
-                                                         "or an image under assets/ or swap/")
-    extra_add.add_argument("--end", default=None, help="last frame of the new clip: U/T:FRAME or an image under "
-                                                       "assets/ or swap/")
-    extra_add.add_argument("--ref", action="append", help="reference image under assets/ or swap/ (repeatable)")
+                                                         "is shot-first or shot-last, the first or last frame conform "
+                                                         "kept, or first, last or a frame number of the take's raw "
+                                                         "file) or a generated image under assets/ or an image of the "
+                                                         "swap table under swap/, never a frame of the reference")
+    extra_add.add_argument("--end", default=None, help="last frame of the new clip: U/T:FRAME or an image, as for "
+                                                       "--start")
+    extra_add.add_argument("--ref", action="append", help="reference image: a generated file under assets/ or an "
+                                                          "image of the swap table under swap/ (repeatable)")
     extra_add.add_argument("--quality", choices=plan.QUALITIES, default="draft",
                            help="draft: the model's first resolution, final: its last")
     extra_add.add_argument("--aspect-ratio", default=None,

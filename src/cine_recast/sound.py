@@ -34,12 +34,12 @@ from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import ToolNotFound, audio_streams
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch sound.IssueRefused)
-from cine_recast.lifecycle import (SENT, fail, finish, highest, is_number, is_text, issue_in_order, quote, reconcile,
-                                   require_issued, require_result, stale_quote)
-from cine_recast.paths import ProjectPaths, inside_folder, same_bytes
+from cine_recast.lifecycle import (SENT, batch_problem, fail, finish, highest, is_number, is_text, issue_in_order,
+                                   quote, reconcile, require_issued, require_result, stale_quote)
+from cine_recast.paths import ProjectPaths, refuse_project_material, same_bytes
 from cine_recast.plan import valid_models
 from cine_recast.project import load_project
-from cine_recast.textrules import han_chars, is_english_prompt
+from cine_recast.textrules import han_problem, is_english_prompt
 
 TOOL = "generate_audio"
 KINDS = ("music", "sfx", "ambience")
@@ -112,8 +112,8 @@ def _problems(item: dict, models: dict[str, dict]) -> list[str]:
     name = item.get("label")
     if not is_text(name):
         problems.append(f"{label}: label must be a non-empty text.")
-    elif han_chars(name):
-        problems.append(f"{label}: label must not contain Han characters ({''.join(han_chars(name))}).")
+    elif han_problem("label", name):
+        problems.append(f"{label}: {han_problem('label', name)}.")
     prompt = item.get("prompt")
     if not isinstance(prompt, str) or not is_english_prompt(prompt):
         problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
@@ -130,8 +130,9 @@ def _problems(item: dict, models: dict[str, dict]) -> list[str]:
     elif spec is not None and not spec["min_seconds"] <= seconds <= spec["max_seconds"]:
         problems.append(f"{label}: seconds {seconds} is outside the limits of model {model!r} "
                         f"({spec['min_seconds']} to {spec['max_seconds']} s).")
-    if not is_text(item.get("batch")):
-        problems.append(f"{label}: batch must not be empty.")
+    problem = batch_problem(label, item.get("batch"))
+    if problem:
+        problems.append(problem)
     return problems
 
 
@@ -285,16 +286,11 @@ def _files_named_for(folder: Path, sound_id: str) -> list[Path]:
 
 def _check_result_file(root: Path, sound_id: str, source: Path) -> None:
     """Refuse a result file that is not a downloaded generation result with an audio stream."""
-    pp = ProjectPaths(root)
     if source.suffix.lower() not in SUFFIXES:
         raise CineRecastError(f"sound {sound_id}: result file {source} must be a .wav, .mp3, .m4a, .ogg or .flac file")
     if not source.is_file():
         raise CineRecastError(f"sound {sound_id}: result file not found: {source}")
-    folder = inside_folder(source, [*pp.material_folders(), pp.sounds_dir, pp.extras_dir])
-    if folder is not None:
-        raise CineRecastError(f"sound {sound_id}: result file {source} is project material (inside the project's "
-                              f"{folder.name} folder), not a generation result; register only files downloaded from "
-                              "the generation job")
+    refuse_project_material(root, source, f"sound {sound_id}")
     if same_bytes(source, root / load_project(root)["reference"]):
         raise CineRecastError(f"sound {sound_id}: {source} is the reference video (its bytes equal the project's "
                               "reference copy); the film's sound is generated for the film, the reference's sound is "
@@ -315,10 +311,10 @@ def record_done(root: Path, sound_id: str, provider_id: str, credits: float, fil
     save. Returns {"sound", "file"} with the stored file relative to the project.
 
     Refused: an item that is not issued; a file that is missing, of another type, without an audio
-    stream, inside the project's reference/, analysis/, takes/, out/, assets/ or sounds/ folder, or
-    with the bytes of the reference copy. The file of an item the ledger records as done is never
-    replaced. While the ledger does not record it as done, files already named for this id are
-    leftovers of an interrupted call and are removed. The stored file is listed in sounds.json
+    stream, project material (paths.refuse_project_material), or with the bytes of the reference
+    copy. The file of an item the ledger records as done is never replaced. While the ledger does
+    not record it as done, files already named for this id are leftovers of an interrupted call and
+    are removed. The stored file is listed in sounds.json
     before the ledger records done; if the ledger refuses, the stored file is removed and the list
     restored.
     """
