@@ -66,14 +66,14 @@ def test_takes_cuts_finds_a_shifted_cut_and_the_held_tail(held, tmp_path, capsys
     root = held.root
     assert unit(root, "u01")["pad_frames"] == 32
     # The model's take starts 3 frames late: the cut moves from 24 to 21, the last moving frame from
-    # 63 to 60, and the held copies of it follow up to the end.
+    # 63 to 60, and the held copies of it follow from 61 up to the end.
     t = fake_take(root, "u01", tmp_path, filters="trim=start_frame=3,setpts=PTS-STARTPTS", extra_frames=0)
     folder = held.take_dir("u01", t)
     before = _snapshot(folder)
     capsys.readouterr()
     assert main(["takes", "cuts", str(root), "--unit", "u01", "--take", t]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "frames": 93, "unit_frames": 64, "pad_frames": 32, "cuts": [21], "tail_static_from": 60}
+        "frames": 93, "unit_frames": 64, "pad_frames": 32, "cuts": [21], "tail_static_from": 61}
     assert _snapshot(folder) == before and sorted(p.name for p in folder.iterdir()) == ["meta.json", "raw.mp4"]
 
 
@@ -83,9 +83,10 @@ def test_takes_cuts_reports_a_take_without_a_held_tail(held, result_clip):
         "frames": 48, "unit_frames": 64, "pad_frames": 32, "cuts": [], "tail_static_from": None}
 
 
-@pytest.mark.parametrize("copies, expected", [(4, None), (5, 63)])
+@pytest.mark.parametrize("copies, expected", [(4, None), (5, 64)])
 def test_a_held_tail_needs_six_frames(held, tmp_path, copies, expected):
-    # the 64 moving frames, then `copies` copies of the last one: a run of copies + 1 frames
+    # the 64 moving frames, then `copies` copies of the last one: a run of copies + 1 frames; the
+    # value is the first copy, so --take-cuts "0,<value>" keeps the last moving frame 63
     t = fake_take(held.root, "u01", tmp_path, filters="trim=end_frame=64", extra_frames=copies)
     assert scan_take(held.root, "u01", t)["tail_static_from"] == expected
 

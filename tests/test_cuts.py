@@ -39,6 +39,28 @@ def test_fast_occluder_sweep_is_not_a_cut(tmp_path):
     assert cuts_of(make_sweep_clip(tmp_path / "s.mp4")) == []
 
 
+def _slow_pan(path, *, frames=40, held=8):
+    """A smooth pan of 0.5 px per frame (the content is drawn 4x larger, moved 2 px per frame and
+    scaled down), then `held` copies of its last frame. On the held-tail measure the pan moves
+    about 0.8 per frame, like a slow real shot; the copies differ by almost nothing."""
+    from conftest import _encode_args, _run
+
+    w, h = 384 * 4, 216 * 4
+    graph = (f"testsrc2=size={w + 2 * frames + 8}x{h}:rate=24,trim=end_frame=1,loop=loop={frames - 1}:size=1,"
+             f"setpts=N/(24*TB),crop=w={w}:h={h}:x='n*2':y=0,scale=384:216:flags=area,"
+             f"tpad=stop_mode=clone:stop={held},format=yuv420p")
+    _run(["-f", "lavfi", "-i", graph, "-frames:v", str(frames + held), *_encode_args(path)])
+    return path
+
+
+def test_a_slow_real_shot_is_not_a_held_tail(tmp_path):
+    from cine_recast.cuts import held_tail_start
+
+    path = _slow_pan(tmp_path / "slow.mp4")
+    info = probe(path)
+    assert held_tail_start(path, PictureBox(0, 0, info.width, info.height)) == 40   # the first held copy
+
+
 def test_shots_from_cuts():
     assert shots_from_cuts([30, 54], 90) == [Shot(1, 0, 30), Shot(2, 30, 54), Shot(3, 54, 90)]
     assert shots_from_cuts([], 90) == [Shot(1, 0, 90)]

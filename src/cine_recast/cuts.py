@@ -17,7 +17,8 @@ PEAK_RATIO = 3.0        # ... and by at least this many times the median of its 
 WINDOW = 8              # neighbours taken on each side of a frame for that median
 ISOLATION_FACTOR = 2.0  # a cut is a lone spike: rejects broad peaks such as a fast occluder sweep
 FLASH_FACTOR = 0.5      # a change that returns this close to the frame before it is a flash
-HOLD_DIFF = 1.5         # frames whose signatures differ by less than this are copies of one picture
+HOLD_DIFF = 0.25        # frames whose signatures differ by less than this are copies of one picture
+                        # (held copies differ by about 0.05; a slow real shot moves 0.6 to 1.3 per frame)
 HOLD_MIN_RUN = 6        # a held tail shorter than this many frames is not reported
 
 
@@ -101,12 +102,14 @@ def detect_cuts(path: Path, info: VideoInfo, box: PictureBox) -> list[int]:
 
 
 def held_tail_start(path: Path, box: PictureBox) -> int | None:
-    """The first frame of the run of near-identical frames that lasts to the end of the clip, or
-    None when that run is shorter than HOLD_MIN_RUN frames (or the clip has no frames).
+    """The first held copy of the run of near-identical frames that lasts to the end of the clip:
+    the frame after the run's first frame, which is the last real frame. None when the run is
+    shorter than HOLD_MIN_RUN frames (the real frame counted) or the clip has no frames.
 
     Walking back from the last frame, a frame stays in the run while the mean absolute difference
     of its signature (the gray signature detect_cuts uses) to the next frame's is below HOLD_DIFF.
-    This finds the copies of one picture a model returns for the held end of a padded source.
+    This finds the copies of one picture a model returns for the held end of a padded source; as
+    the end boundary of take_cuts the value keeps the last real frame and drops every copy.
     """
     d: list[float] = []         # d[i] = mad(sig[i], sig[i+1])
     previous = None
@@ -119,7 +122,7 @@ def held_tail_start(path: Path, box: PictureBox) -> int | None:
     start = len(d)              # the last frame
     while start > 0 and d[start - 1] < HOLD_DIFF:
         start -= 1
-    return start if len(d) + 1 - start >= HOLD_MIN_RUN else None
+    return start + 1 if len(d) + 1 - start >= HOLD_MIN_RUN else None
 
 
 def shots_from_cuts(cuts: list[int], total_frames: int) -> list[Shot]:
