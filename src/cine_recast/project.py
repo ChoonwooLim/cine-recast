@@ -6,7 +6,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from cine_recast.errors import CineRecastError
-from cine_recast.ffmpeg import stream_facts
+from cine_recast.ffmpeg import ToolNotFound, stream_facts
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.paths import ProjectPaths
 
@@ -48,8 +48,12 @@ def reference_problem(facts: dict) -> str | None:
 
 
 def _check_reference(reference: Path) -> None:
+    """Refuse a reference that reference_problem rejects or ffprobe cannot read. A missing ffprobe is
+    passed through as it is: re-encoding the video would not help."""
     try:
         facts = stream_facts(reference)
+    except ToolNotFound:
+        raise
     except CineRecastError:
         problem = "ffprobe cannot read it"
     else:

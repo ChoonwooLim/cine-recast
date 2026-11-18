@@ -31,7 +31,7 @@ from cine_recast.jsonio import read_json, read_project_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch plan.IssueRefused)
 from cine_recast.lifecycle import (SENT, UNISSUED, fail, finish, highest, is_number, is_text, issue_in_order, now,
                                    quote, reconcile, require_issued, require_result, resolve, stale_quote)
-from cine_recast.paths import ProjectPaths, inside_folder
+from cine_recast.paths import ProjectPaths, inside_folder, same_bytes
 from cine_recast.project import load_project
 from cine_recast.textrules import is_english_prompt
 
@@ -648,8 +648,10 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     """Store the returned file as a new take, record the job as done in the ledger, then save.
 
     A file inside the project's reference/, analysis/, takes/, out/ or assets/ folder is refused: it
-    is project material, not a generation result. If the ledger refuses, the take folder made by
-    this call is removed, so a refused call leaves nothing behind.
+    is project material, not a generation result; so is a file whose bytes equal the reference copy
+    (the original file given to init). A unit with an invalid id, shots or qc_skip is refused before
+    anything is stored. If the ledger refuses, the take folder made by this call is removed, so a
+    refused call leaves nothing behind.
     """
     from cine_recast.takes import new_take  # takes imports this module
 
@@ -672,6 +674,10 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
     if folder is not None:
         raise CineRecastError(f"job {job_id}: {source} is project material (inside the project's {folder.name} "
                               "folder), not a generation result; register only files downloaded from the "
+                              "generation job")
+    if same_bytes(source, root / load_project(root)["reference"]):
+        raise CineRecastError(f"job {job_id}: {source} is the reference video (its bytes equal the project's "
+                              "reference copy), not a generation result; register only files downloaded from the "
                               "generation job")
     take = new_take(root, unit_id, source, {
         "job": job_id, "provider_id": provider_id, "credits": float(credits),

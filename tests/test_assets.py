@@ -133,15 +133,50 @@ def test_a_ledger_refusal_removes_the_stored_files(assets3, tmp_path):
     assert read_json(assets3.assets_file)["assets"][0]["files"] == []          # the listed files are taken back
 
 
-def test_a_stored_file_is_never_overwritten(assets3, tmp_path):
-    _issued(assets3.root, "hero")
-    issue_next(assets3.root, "assets-1")
-    existing = assets3.asset_dir("hero") / "a0001_1.png"
-    existing.parent.mkdir(parents=True)
-    existing.write_bytes(b"kept")
-    with pytest.raises(CineRecastError, match="overwritten"):
-        record_done(assets3.root, "a0001", "prov-1", 1.0, [png(tmp_path / "x.png")])
-    assert existing.read_bytes() == b"kept" and job_states(assets3.root)["a0001"] == "issued"
+def test_files_of_a_done_asset_are_never_replaced(assets3, tmp_path):
+    root = assets3.root
+    stored = root / generate_and_use(root, "hero", tmp_path)                    # a0001 done in the ledger
+    before = stored.read_bytes()
+    other = tmp_path / "other.png"
+    other.write_bytes(b"another image")
+    with pytest.raises(CineRecastError, match="done"):
+        record_done(root, "a0001", "prov-2", 1.0, [other])
+    assert stored.read_bytes() == before and [p.name for p in assets3.asset_dir("hero").iterdir()] == [stored.name]
+
+
+def test_a_refusal_after_removing_leftovers_lists_no_missing_file(assets3, tmp_path):
+    root = assets3.root
+    add(root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    folder = assets3.asset_dir("hero")
+    folder.mkdir(parents=True)
+    (folder / "a0001_1.png").write_bytes(b"left over")
+    data = read_json(assets3.assets_file)
+    data["assets"][0].update(state="issued", files=["assets/hero/a0001_1.png"])   # the ledger never issued it
+    write_json(assets3.assets_file, data)
+    with pytest.raises(CineRecastError, match="never issued"):
+        record_done(root, "a0001", "prov-1", 1.0, [png(tmp_path / "x.png")])
+    assert not any(folder.iterdir()) and read_json(assets3.assets_file)["assets"][0]["files"] == []
+
+
+def test_leftovers_of_an_interrupted_done_are_replaced(assets3, tmp_path):
+    root = assets3.root
+    _issued(root, "hero")
+    issue_next(root, "assets-1")
+    folder = assets3.asset_dir("hero")                     # a hard stop after storing, before ledger.done
+    folder.mkdir(parents=True)
+    for name in ("a0001_1.png", "a0001_2.png"):
+        (folder / name).write_bytes(b"left over")
+    data = read_json(assets3.assets_file)
+    data["assets"][0]["files"] = ["assets/hero/a0001_1.png", "assets/hero/a0001_2.png"]
+    write_json(assets3.assets_file, data)
+    returned = png(tmp_path / "x.png")
+    done = record_done(root, "a0001", "prov-1", 6.0, [returned])
+    assert done["files"] == ["assets/hero/a0001_1.png"] and list_assets(root)[0]["files"] == done["files"]
+    assert (folder / "a0001_1.png").read_bytes() == returned.read_bytes() and not (folder / "a0001_2.png").exists()
+    lines = assets3.ledger_file.read_text(encoding="utf-8").splitlines()
+    assert sum('"job_done"' in line and '"a0001"' in line for line in lines) == 1
+    use(root, "hero", "assets/hero/a0001_1.png")
+    assert check(root) == []
 
 
 def test_done_takes_only_image_files(assets3, tmp_path):

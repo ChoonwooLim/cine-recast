@@ -59,7 +59,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 쓰는 것: `project.json`, `reference/source.<확장자>`.
 - 출력: `project created: <폴더>`.
-- 무엇이든 만들기 전에 참조 영상을 ffprobe로 읽어 본다. 거부되면 프로젝트 폴더는 생기지 않는다.
+- 무엇이든 만들기 전에 참조 영상을 ffprobe로 읽어 본다. 거부되면 프로젝트 폴더는 생기지 않는다. ffprobe가 PATH에 없으면 영상 탓이 아니므로 `ffprobe was not found on PATH`가 그대로 나온다.
 - 거부: 참조 영상 파일이 없다. 프로젝트 폴더가 이미 있고 비어 있지 않다. 참조 영상을 ffprobe가 읽지 못하거나 영상 스트림이 없다. 컨테이너가 mp4/mov 계열, mkv/webm, avi, mpegts, mxf가 아니다. 회전 정보가 0이 아니다. 픽셀이 정사각형이 아니다(sample aspect ratio가 없거나 1:1이어야 한다). 프레임 속도가 가변이다(`avg_frame_rate`와 `r_frame_rate`가 2퍼센트 넘게 다르다). 이때 메시지가 할 일을 알려 준다. 회전 없는 정사각형 픽셀의 고정 프레임 속도 mp4로 다시 인코딩한 뒤 `init`을 다시 한다.
 
 ### rights set
@@ -198,7 +198,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - `--file`: 돌려받은 이미지마다 한 번씩. `--provider-id`: Higgsfield의 작업 id. `--credits`: 실제로 차감된 크레딧.
-- 쓰는 것: `assets/<요소>/<자료 id>_<번호>.<확장자>`, `assets.json`, `ledger.jsonl`. 있던 파일은 덮어쓰지 않는다.
+- 쓰는 것: `assets/<요소>/<자료 id>_<번호>.<확장자>`, `assets.json`, `ledger.jsonl`. 장부에 `done`으로 기록된 자료의 파일은 바꾸지 않는다. 장부에 `done`이 없는데 그 자료 id로 된 파일이 이미 있으면, 앞서 중간에 끊긴 `assets done`이 남긴 것이므로 지우고 이번에 준 파일을 저장한다. 끊긴 뒤에는 같은 명령을 같은 파일로 다시 하면 된다.
 - 출력: `a0001: done, files assets/hero/a0001_1.png, assets/hero/a0001_2.png`.
 - 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없거나 이미지 형식이 아니다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안에 있는 파일이다(원본 스틸이나 다른 자료로 이미 등록된 이미지 같은 프로젝트 자료이지 생성 결과가 아니다).
 
@@ -339,7 +339,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - `--provider-id`: Higgsfield의 작업 id. `--credits`: 실제로 차감된 크레딧.
 - 쓰는 것: `takes/<단위>/<테이크>/raw.<확장자>`, `meta.json`, `ledger.jsonl`, `plan.json`. 테이크 번호는 `t001`부터 올라가고 덮어쓰지 않는다.
 - 출력: `j0001: done, unit u01 take t001`.
-- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안에 있는 파일이다(링크와 `..`을 따라간 실제 위치로 보고, 대소문자가 달라도 같은 폴더로 본다). 그런 파일은 프로젝트 자료이지 생성 결과가 아니다. 생성 작업에서 내려받은 파일만 등록한다.
+- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/` 안에 있는 파일이다(링크와 `..`을 따라간 실제 위치로 보고, 대소문자가 달라도 같은 폴더로 본다). 그런 파일은 프로젝트 자료이지 생성 결과가 아니다. 바이트가 프로젝트의 참조 영상 사본과 같은 파일이다(`init`에 준 원본 파일이 밖에 있어도 걸린다). 그것은 참조 영상이지 생성 결과가 아니다. 생성 작업에서 내려받은 파일만 등록한다.
+- 손으로 고쳐 망가진 단위(형식이 틀린 단위 id, `shots`, `qc_skip`)도 `jobs done`을 멈춘다. 메시지가 무엇을 고칠지 알려 주고(`plan check`가 문제를 보여 준다), 그때는 아무것도 저장되지 않고 장부에도 적히지 않는다.
 
 ### jobs fail
 
@@ -412,7 +413,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 쓰는 것: `out/master.mov`(ProRes), `out/final.mp4`. 출력: `final.mp4`의 경로.
 - `--audio`: 완성본에 넣을 오디오 파일. 원본의 소리는 쓰지 않는다. 생략하면 소리 없는 영상이 된다.
-- 거부: 고른 테이크가 없는 단위가 있다. 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다. `--audio`가 프로젝트의 `reference/`나 `analysis/` 안에 있는 파일이거나, 바이트가 참조 영상과 같은 파일이다(`init`에 준 원본 파일도 여기서 걸린다).
+- 거부: 고른 테이크가 없는 단위가 있다. 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다. `--audio`가 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/` 안에 있는 파일이거나(`out/compare.mp4`에는 원본의 소리가 들어 있고, 편집 모델의 테이크에도 남아 있을 수 있다), 바이트가 참조 영상과 같은 파일이다(`init`에 준 원본 파일도 여기서 걸린다). 완성본의 오디오는 완성본을 위해 만든 파일이어야 한다.
 
 ### compare
 

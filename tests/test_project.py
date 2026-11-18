@@ -56,6 +56,16 @@ def test_init_refuses_an_unusable_reference_and_creates_nothing(tmp_path, clip3,
     assert not (tmp_path / "p").exists()
 
 
+def test_init_passes_a_missing_ffprobe_through(tmp_path, clip3, monkeypatch, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))                     # ffprobe cannot be found
+    capsys.readouterr()
+    assert main(["init", str(tmp_path / "p"), "--reference", str(clip3), "--name", "t"]) == 2
+    assert capsys.readouterr().err == "error: ffprobe was not found on PATH\n"
+    assert not (tmp_path / "p").exists()
+
+
 def _facts(**changes):
     return {"video": True, "formats": ["mov", "mp4"], "rotation": 0.0, "sar": None,
             "avg_rate": Fraction(24), "r_rate": Fraction(24), **changes}

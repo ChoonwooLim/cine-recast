@@ -64,7 +64,7 @@ def test_check_requires_english_prompts(cast3):
     assert check(cast3.root) == []
 
 
-def test_issue_and_record(planned3, tmp_path, clip3):               # planned3: built plan with valid prompts
+def test_issue_and_record(planned3, tmp_path, result_clip):               # planned3: built plan with valid prompts
     root = planned3.root
     with pytest.raises(CineRecastError):
         set_cost(root, "j0009", 5.0)                                 # unknown job
@@ -76,10 +76,10 @@ def test_issue_and_record(planned3, tmp_path, clip3):               # planned3: 
     jobs = issue_next(root, "b")
     assert [j["job_id"] for j in jobs] == ["j0001"] and jobs[0]["tool"] == "generate_video"
     assert all(Path(m["path"]).is_absolute() and Path(m["path"]).is_file() for m in jobs[0]["medias"])
-    first = record_done(root, "j0001", "prov-1", 38.0, clip3)
+    first = record_done(root, "j0001", "prov-1", 38.0, result_clip)
     assert first == {"unit": "u01", "take": "t001"} and (planned3.take_dir("u01", "t001") / "raw.mp4").is_file()
     retry = add_job(root, "u01", "b", "draft"); set_cost(root, retry["id"], 10.0); issue_next(root, "b")
-    assert record_done(root, retry["id"], "prov-2", 10.0, clip3)["take"] == "t002"
+    assert record_done(root, retry["id"], "prov-2", 10.0, result_clip)["take"] == "t002"
     assert load(root)["jobs"][0]["state"] == "done" and audit(root)["ok"] is True
 
 
@@ -221,10 +221,10 @@ def test_set_cost_needs_a_positive_amount(planned3, credits):
                                               "state": "planned", "est_credits": None}
 
 
-def test_job_state_rules(planned3, clip3, tmp_path):
+def test_job_state_rules(planned3, result_clip, tmp_path):
     root = planned3.root
     with pytest.raises(CineRecastError, match="j0001"):
-        record_done(root, "j0001", "prov-1", 1.0, clip3)              # planned, never issued
+        record_done(root, "j0001", "prov-1", 1.0, result_clip)              # planned, never issued
     with pytest.raises(CineRecastError, match="j0001"):
         record_fail(root, "j0001", "timeout")
     set_cost(root, "j0001", 20.0); set_cost(root, "j0001", 25.0)      # a quote may be revised before issue
@@ -236,7 +236,7 @@ def test_job_state_rules(planned3, clip3, tmp_path):
         record_done(root, "j0001", "prov-1", 1.0, tmp_path / "missing.mp4")
     assert record_fail(root, "j0001", "provider timeout", 2.0)["state"] == "failed"
     with pytest.raises(CineRecastError):
-        record_done(root, "j0001", "prov-1", 1.0, clip3)              # already finished
+        record_done(root, "j0001", "prov-1", 1.0, result_clip)              # already finished
     assert batch_status(root, "b") == {"limit": 30.0, "committed": 2.0, "remaining": 28.0}
     assert not (root / "takes").exists() and audit(root)["ok"] is True
 
@@ -262,10 +262,10 @@ def test_issued_job_carries_the_unit_settings(planned3):
     assert Path(job["medias"][1]["path"]) == Path(unit["inputs"][1]["path"]).resolve()
 
 
-def test_record_done_writes_take_meta(planned3, clip3):
+def test_record_done_writes_take_meta(planned3, result_clip):
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 10.0, "owner"); issue_next(root, "b")
-    record_done(root, "j0001", "prov-1", 9.5, clip3)
+    record_done(root, "j0001", "prov-1", 9.5, result_clip)
     meta = read_json(planned3.take_dir("u01", "t001") / "meta.json")
     assert set(meta) == {"job", "provider_id", "credits", "quality", "recorded_at"}
     assert (meta["job"], meta["provider_id"], meta["credits"], meta["quality"]) == ("j0001", "prov-1", 9.5, "draft")
@@ -287,7 +287,7 @@ def test_cli_plan_build(cast3, capsys):
     assert [u["shots"] for u in shown["units"]] == [[1, 2, 3]] and shown["units"][0]["params"]["resolution"] == "480p"
 
 
-def test_cli_job_flow(planned3, clip3, capsys):
+def test_cli_job_flow(planned3, result_clip, capsys):
     root = str(planned3.root)
     assert main(["plan", "check", root]) == 0
     assert main(["jobs", "set-cost", root, "--job", "j0001", "--credits", "40"]) == 0
@@ -298,7 +298,7 @@ def test_cli_job_flow(planned3, clip3, capsys):
     issued = json.loads(capsys.readouterr().out)
     assert [j["job_id"] for j in issued] == ["j0001"] and issued[0]["params"]["model"] == "seedance_2_5"
     assert main(["jobs", "done", root, "--job", "j0001", "--provider-id", "prov-1", "--credits", "38",
-                 "--file", str(clip3)]) == 0
+                 "--file", str(result_clip)]) == 0
     assert main(["jobs", "add", root, "--unit", "u01", "--batch", "b", "--quality", "draft"]) == 0
     assert main(["jobs", "set-cost", root, "--job", "j0002", "--credits", "5"]) == 0
     assert main(["jobs", "next", root, "--batch", "b"]) == 0
@@ -390,7 +390,7 @@ def test_reconciliation_never_moves_a_job_backwards(planned3):
     ("never_issued", "never issued"),
     ("damaged_ledger", "damaged"),
 ])
-def test_refused_record_done_leaves_no_take(planned3, clip3, setup, fragment):
+def test_refused_record_done_leaves_no_take(planned3, result_clip, setup, fragment):
     root = planned3.root
     if setup == "never_issued":                                # the plan claims issued, the ledger does not
         data = read_json(planned3.plan_file)
@@ -401,21 +401,21 @@ def test_refused_record_done_leaves_no_take(planned3, clip3, setup, fragment):
         with planned3.ledger_file.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write('{"type": "job_done", "time": "x", "job_id": "j0001", ')
     with pytest.raises(CineRecastError, match=fragment):
-        record_done(root, "j0001", "prov-1", 5.0, clip3)
+        record_done(root, "j0001", "prov-1", 5.0, result_clip)
     assert list_takes(root, "u01") == []
 
 
-def test_done_job_without_a_take_points_to_a_new_job(planned3, clip3):
+def test_done_job_without_a_take_points_to_a_new_job(planned3, result_clip):
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
     ledger_done(root, "j0001", "prov-1", 9.0)                  # recorded as done, but no take was stored
     with pytest.raises(CineRecastError, match="jobs add"):
-        record_done(root, "j0001", "prov-1", 9.0, clip3)
+        record_done(root, "j0001", "prov-1", 9.0, result_clip)
     assert list_takes(root, "u01") == []
     j2 = add_job(root, "u01", "b", "draft")["id"]; set_cost(root, j2, 10.0); issue_next(root, "b")
-    assert record_done(root, j2, "prov-2", 9.0, clip3)["take"] == "t001"
+    assert record_done(root, j2, "prov-2", 9.0, result_clip)["take"] == "t001"
     with pytest.raises(CineRecastError) as refused:
-        record_done(root, j2, "prov-2", 9.0, clip3)            # done with a take: no hint, no new folder
+        record_done(root, j2, "prov-2", 9.0, result_clip)            # done with a take: no hint, no new folder
     assert "jobs add" not in refused.value.message and list_takes(root, "u01") == ["t001"]
 
 
@@ -452,7 +452,7 @@ def test_prompt_change_keeps_the_quote(planned3):
     assert issue_next(root, "b")[0]["params"]["prompt"] == "Replace the rider with the person in image 1."
 
 
-def test_jobs_list_shows_sent_params_once_issued(planned3, clip3):
+def test_jobs_list_shows_sent_params_once_issued(planned3, result_clip):
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
     [sent] = issue_next(root, "b")
@@ -460,14 +460,14 @@ def test_jobs_list_shows_sent_params_once_issued(planned3, clip3):
     _edit_unit(planned3, lambda u: u["params"].update(duration=15))
     listed = {j["id"]: j for j in list_jobs(root)}
     assert listed["j0001"]["params"] == sent["params"] and listed["j0002"]["params"]["duration"] == 15
-    record_done(root, "j0001", "prov-1", 10.0, clip3)
+    record_done(root, "j0001", "prov-1", 10.0, result_clip)
     assert {j["id"]: j for j in list_jobs(root)}["j0001"]["params"] == sent["params"]
 
 
-def test_replan_archives_the_plan_and_never_reuses_ids(planned3, clip3):
+def test_replan_archives_the_plan_and_never_reuses_ids(planned3, result_clip):
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
-    record_done(root, "j0001", "prov-1", 10.0, clip3)
+    record_done(root, "j0001", "prov-1", 10.0, result_clip)
     p = build(root, model="seedance_2_5", method="regen", batch="b", replace=True)
     assert [u["id"] for u in p["units"]] == ["u02"] and [j["id"] for j in p["jobs"]] == ["j0002"]
     assert read_json(root / "plans" / "plan-0001.json")["jobs"][0]["state"] == "done"
@@ -491,14 +491,14 @@ def test_ids_continue_after_a_hand_deleted_plan(planned3):
     assert set_cost(root, "j0002", 10.0)["state"] == "quoted"
 
 
-def test_done_without_take_guard_reads_the_ledger(planned3, clip3):
+def test_done_without_take_guard_reads_the_ledger(planned3, result_clip):
     root = planned3.root
     set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner"); issue_next(root, "b")
     data = read_json(planned3.plan_file)
     data["jobs"][0]["state"] = "done"                                   # the plan claims done, the ledger does not
     write_json(planned3.plan_file, data)
     with pytest.raises(CineRecastError) as refused:
-        record_done(root, "j0001", "prov-1", 9.0, clip3)
+        record_done(root, "j0001", "prov-1", 9.0, result_clip)
     assert "jobs add" not in refused.value.message and list_takes(root, "u01") == []
 
 
@@ -549,7 +549,7 @@ def test_relative_swap_image_resolves_against_the_project(cast3, tmp_path, monke
     assert Path(job["medias"][1]["path"]) == local.resolve()
 
 
-def test_flow_in_a_folder_with_hangul_and_a_space(_cast3_template, tmp_path, clip3, capsys):
+def test_flow_in_a_folder_with_hangul_and_a_space(_cast3_template, tmp_path, result_clip, capsys):
     root = tmp_path / "\uc7ac\uc81c\uc791 \ud504\ub85c\uc81d\ud2b8"
     shutil.copytree(_cast3_template, root)
     write_models(root)
@@ -563,7 +563,7 @@ def test_flow_in_a_folder_with_hangul_and_a_space(_cast3_template, tmp_path, cli
     [job] = json.loads(capsys.readouterr().out)
     assert "\ud504\ub85c\uc81d\ud2b8" in job["medias"][0]["path"] and all(Path(m["path"]).is_file() for m in job["medias"])
     assert main(["jobs", "done", r, "--job", "j0001", "--provider-id", "prov-1", "--credits", "10",
-                 "--file", str(clip3)]) == 0
+                 "--file", str(result_clip)]) == 0
     assert (root / "takes" / "u01" / "t001" / "raw.mp4").is_file() and audit(root)["ok"] is True
 
 
@@ -679,11 +679,53 @@ def _copy_into(pp, folder):
     return target
 
 
-def test_jobs_done_takes_a_downloaded_file_inside_the_project(planned3, clip3):
+def test_jobs_done_refuses_the_reference_video_given_to_init(planned3, clip3, capsys):
+    _issued_job(planned3)                                  # planned3 was made with init --reference clip3
+    before = planned3.ledger_file.read_bytes()
+    capsys.readouterr()
+    assert main(["jobs", "done", str(planned3.root), "--job", "j0001", "--provider-id", "prov-1", "--credits", "9",
+                 "--file", str(clip3)]) == 2
+    assert "is the reference video" in capsys.readouterr().err
+    assert list_takes(planned3.root, "u01") == [] and planned3.ledger_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["units"][0].update(shots="1, 2, 3"),
+    lambda d: d["units"][0].update(qc_skip=["colour"]),
+    lambda d: (d["units"][0].update(id="..\\..\\evil"), d["jobs"][0].update(unit="..\\..\\evil")),
+])
+def test_jobs_done_stops_at_a_damaged_unit(planned3, result_clip, capsys, mutate):
+    _issued_job(planned3)
+    data = read_json(planned3.plan_file)
+    mutate(data)
+    write_json(planned3.plan_file, data)
+    before = planned3.ledger_file.read_bytes()
+    capsys.readouterr()
+    assert main(["jobs", "done", str(planned3.root), "--job", "j0001", "--provider-id", "prov-1", "--credits", "9",
+                 "--file", str(result_clip)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "plan check" in err
+    assert not (planned3.root / "takes").exists() and planned3.ledger_file.read_bytes() == before
+
+
+def test_an_unopenable_lock_file_refuses_cleanly(planned3, capsys):
+    root = planned3.root
+    set_cost(root, "j0001", 10.0); approve(root, "b", 50.0, "owner")
+    planned3.ledger_lock.unlink()
+    planned3.ledger_lock.mkdir()                           # a folder where the lock file belongs
+    capsys.readouterr()
+    assert main(["jobs", "next", str(root), "--batch", "b"]) == 2
+    out = capsys.readouterr()
+    assert "ledger.lock" in out.err and "defect" not in out.err and json.loads(out.out) == []
+    job = read_json(planned3.plan_file)["jobs"][0]
+    assert job["state"] == "quoted" and "sent_params" not in job
+
+
+def test_jobs_done_takes_a_downloaded_file_inside_the_project(planned3, result_clip):
     _issued_job(planned3)
     downloaded = planned3.root / "downloads" / "j0001.mp4"
     downloaded.parent.mkdir()
-    shutil.copyfile(clip3, downloaded)
+    shutil.copyfile(result_clip, downloaded)
     assert record_done(planned3.root, "j0001", "prov-1", 9.0, downloaded)["take"] == "t001"
 
 

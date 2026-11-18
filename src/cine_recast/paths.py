@@ -1,3 +1,4 @@
+import hashlib
 import os
 from collections.abc import Iterable
 from pathlib import Path
@@ -18,6 +19,19 @@ def inside_folder(path: Path, folders: Iterable[Path]) -> Path | None:
         if target == base or base in target.parents:
             return Path(folder)
     return None
+
+
+def _sha256(path: Path) -> str:
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def same_bytes(path: Path, other: Path) -> bool:
+    """True when both files exist and hold the same bytes: sizes first, then a streamed SHA-256."""
+    path, other = Path(path), Path(other)
+    if not (path.is_file() and other.is_file()) or path.stat().st_size != other.stat().st_size:
+        return False
+    return _sha256(path) == _sha256(other)
 
 
 class ProjectPaths:

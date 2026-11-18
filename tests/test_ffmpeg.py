@@ -92,6 +92,11 @@ def test_inputs_are_opened_with_the_file_and_pipe_protocols_only(tmp_path, call)
         call(_playlist(tmp_path), tmp_path / "x.png")
 
 
+def test_run_opens_its_inputs_with_the_file_and_pipe_protocols_only(tmp_path):
+    with pytest.raises(CineRecastError, match="whitelist 'file,pipe'"):
+        run(["-v", "error", "-i", str(_playlist(tmp_path)), "-f", "null", "-"])
+
+
 def test_run_puts_the_protocol_whitelist_before_every_input():
     from cine_recast.ffmpeg import _guard_inputs
 

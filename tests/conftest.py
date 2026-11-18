@@ -125,6 +125,13 @@ def clip3(tmp_path_factory) -> Path:
     return make_clip(path, [("testsrc2", 30), ("smptebars", 24), ("mandelbrot", 36)])
 
 
+@pytest.fixture(scope="session")
+def result_clip(tmp_path_factory) -> Path:
+    """A stand-in for a file a generation job returns: a clip that is not the reference."""
+    path = tmp_path_factory.mktemp("results") / "result.mp4"
+    return make_clip(path, [("testsrc2", 48)])
+
+
 @pytest.fixture
 def project3(tmp_path, clip3):
     from cine_recast.project import init_project

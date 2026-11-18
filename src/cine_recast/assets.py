@@ -12,8 +12,8 @@ planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (rec
 - The ledger is the authority for state: every load moves an asset forward to the state the
   ledger records for it.
 - A quote is bound to what it priced: the model, the params and the refs (not the prompt).
-- Returned images are stored as assets/<element>/<id>_<n><suffix> and never overwritten; use puts
-  one of them in the swap table.
+- Returned images are stored as assets/<element>/<id>_<n><suffix> and never replaced once the
+  ledger records the asset as done; use puts one of them in the swap table.
 - Asset ids (a0001, ...) share the ledger with video job ids (j0001, ...) and are never reused.
 - Model limits come only from the project's models.json.
 """
@@ -270,16 +270,27 @@ def issue_next(root: Path, batch: str) -> list[dict]:
                           noun=_NOUN, command=_QUOTE_COMMAND)
 
 
+def _files_named_for(folder: Path, asset_id: str) -> list[Path]:
+    """The files in folder named as record_done names the files of asset_id (<id>_<n><suffix>)."""
+    if not folder.is_dir():
+        return []
+    suffixes = "|".join(re.escape(suffix) for suffix in IMAGE_SUFFIXES)
+    name = re.compile(rf"{re.escape(asset_id)}_[1-9][0-9]*({suffixes})")
+    return [path for path in folder.iterdir() if path.is_file() and name.fullmatch(path.name)]
+
+
 def record_done(root: Path, asset_id: str, provider_id: str, credits: float, files: list[Path]) -> dict:
     """Store the returned images as assets/<element>/<id>_<n><suffix>, record the asset as done in
     the ledger, then save. Returns {"asset", "files"} with the stored files relative to the project.
 
-    A name that exists already is never overwritten: the call fails. A file inside the project's
-    reference/, analysis/, takes/, out/ or assets/ folder is refused: it is project material (a frame
-    of the reference, or an image already stored under another asset), not a generation result.
-    The stored files are listed in assets.json before the ledger records the asset as done, so a
-    crash between the two leaves them reachable. If the ledger refuses, the files stored by this call
-    are removed and taken off the list again, so a refused call leaves nothing behind.
+    A file inside the project's reference/, analysis/, takes/, out/ or assets/ folder is refused: it
+    is project material (a frame of the reference, or an image already stored under another asset),
+    not a generation result. The files of an asset the ledger records as done are never replaced.
+    While the ledger does not record it as done, files already named for this asset id are leftovers
+    of an interrupted call (a hard stop after storing them, before ledger.done): they are removed and
+    the files given now are stored. The stored files are listed in assets.json before the ledger
+    records the asset as done, so a stop after ledger.done leaves them listed and usable. If the
+    ledger refuses, the files stored by this call are removed and taken off the list again.
     """
     root = Path(root)
     pp = ProjectPaths(root)
@@ -302,12 +313,15 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
             raise CineRecastError(f"asset {asset_id}: result file {source} is project material (inside the project's "
                                   f"{folder.name} folder), not a generation result; register only files downloaded "
                                   "from the generation job")
+    if ledger.job_states(root).get(asset_id) == "done":
+        raise CineRecastError(f"asset {asset_id} is done in the ledger; its stored files are never replaced")
     folder = pp.asset_dir(element)
-    targets = [folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
-    for target in targets:
-        if target.exists():
-            raise CineRecastError(f"asset {asset_id}: {target.relative_to(root).as_posix()} exists already; "
-                                  "stored files are never overwritten")
+    for leftover in _files_named_for(folder, asset_id):   # an interrupted call stored them, the ledger never heard
+        leftover.unlink()
+    listed = asset.get("files")                            # restored if the ledger refuses: only files still there
+    previous = [name for name in listed if isinstance(name, str) and (root / name).is_file()] \
+        if isinstance(listed, list) else []
+    targets =[folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
     folder.mkdir(parents=True, exist_ok=True)
     stored: list[Path] = []
 
@@ -324,7 +338,6 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
         undo()
         raise
     names = [target.relative_to(root).as_posix() for target in targets]
-    previous = asset.get("files", [])
     asset["files"] = names
     try:
         _save(root, data)  # listed before the ledger records done, so a crash after that strands no paid file

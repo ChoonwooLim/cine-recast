@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from cine_recast.assemble import assemble, compare
@@ -19,14 +21,25 @@ def test_assemble_with_supplied_audio(finished3, tmp_path):
     assert info.has_audio is True and abs(info.duration - 3.75) < 0.1
 
 
+def _in_out_folder(pp):
+    """A file in out/, as compare.mp4 is (it carries the reference sound)."""
+    pp.out_dir.mkdir(parents=True, exist_ok=True)
+    target = pp.out_dir / "compare.mp4"
+    shutil.copyfile(pp.take_dir("u01", "t001") / "raw.mp4", target)
+    return target
+
+
 @pytest.mark.parametrize("make", [
     lambda pp, clip: pp.root / "reference" / "source.mp4",
     lambda pp, clip: pp.shot_dir(1) / "ref.mp4",
     lambda pp, clip: clip,                                      # the original file given to init
+    lambda pp, clip: pp.take_dir("u01", "t001") / "raw.mp4",    # a take may carry the reference sound
+    lambda pp, clip: _in_out_folder(pp),
 ])
-def test_assemble_refuses_the_reference_as_audio(finished3, clip3, make):
-    with pytest.raises(CineRecastError, match="sound of the reference is never used"):
-        assemble(finished3.root, audio=make(finished3, clip3))
+def test_assemble_refuses_reference_material_as_audio(finished3, clip3, make):
+    audio = make(finished3, clip3)
+    with pytest.raises(CineRecastError, match="must be a file made for the film"):
+        assemble(finished3.root, audio=audio)
     assert not (finished3.out_dir / "final.mp4").exists()
 
 

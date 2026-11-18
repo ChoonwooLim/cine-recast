@@ -57,9 +57,15 @@ else:
 def locked(root: Path, wait: float = LOCK_WAIT) -> Iterator[None]:
     """Hold the exclusive lock on the project's ledger.lock, waiting up to `wait` seconds for it.
 
-    Refuses with CineRecastError when another process (or another handle) holds it that long.
+    Refuses with CineRecastError when another process (or another handle) holds it that long, and
+    when the lock file cannot be opened at all (a folder in its place, no write permission).
     """
-    with ProjectPaths(Path(root)).ledger_lock.open("a+b") as handle:
+    try:
+        opened = ProjectPaths(Path(root)).ledger_lock.open("a+b")
+    except OSError as exc:
+        raise CineRecastError(f"the ledger lock file ledger.lock cannot be opened ({exc.strerror or exc}); make sure "
+                              "ledger.lock in the project folder is an ordinary file this user can write") from exc
+    with opened as handle:
         deadline = time.monotonic() + wait
         while not _try_lock(handle):
             if time.monotonic() >= deadline:

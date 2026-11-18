@@ -5,7 +5,6 @@ audio file that is the reference's material is refused. The reference video is u
 alone, and only there is its audio heard.
 """
 
-import hashlib
 import tempfile
 from fractions import Fraction
 from pathlib import Path
@@ -14,7 +13,7 @@ from cine_recast import plan
 from cine_recast.analyze import load_shots, load_video
 from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import SCALE_FLAGS, probe, run
-from cine_recast.paths import ProjectPaths, inside_folder
+from cine_recast.paths import ProjectPaths, inside_folder, same_bytes
 from cine_recast.project import load_project
 
 COMPARE_HEIGHT = 540
@@ -39,26 +38,20 @@ def _clips_by_shot(root: Path) -> dict[int, Path]:
     return clips
 
 
-def _sha256(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
-
-
 def _check_audio(root: Path, audio: Path) -> None:
-    """Refuse an audio file that is the reference's material: a file inside the project's reference/
-    or analysis/ folder, or a file whose bytes equal the reference (the original file given to init)."""
+    """Refuse an audio file that may carry the reference's sound: a file inside the project's
+    reference/, analysis/, takes/ (a take from an edit model can keep it) or out/ (compare.mp4 has it)
+    folder, or a file whose bytes equal the reference (the original file given to init)."""
     if not audio.is_file():
         raise CineRecastError(f"audio file not found: {audio}")
     pp = ProjectPaths(root)
-    folder = inside_folder(audio, [pp.reference_dir, pp.analysis_dir])
+    folder = inside_folder(audio, [pp.reference_dir, pp.analysis_dir, pp.takes_dir, pp.out_dir])
     if folder is not None:
-        raise CineRecastError(f"audio file {audio} lies inside the project's {folder.name} folder; the sound of the "
-                              "reference is never used, give an audio file made for the film")
-    reference = root / load_project(root)["reference"]
-    if (reference.is_file() and audio.stat().st_size == reference.stat().st_size
-            and _sha256(audio) == _sha256(reference)):
-        raise CineRecastError(f"audio file {audio} is a copy of the reference video; the sound of the reference is "
-                              "never used, give an audio file made for the film")
+        raise CineRecastError(f"audio file {audio} lies inside the project's {folder.name} folder, which can hold the "
+                              "sound of the reference; the film's audio must be a file made for the film")
+    if same_bytes(audio, root / load_project(root)["reference"]):
+        raise CineRecastError(f"audio file {audio} is a copy of the reference video; the film's audio must be a file "
+                              "made for the film, the sound of the reference is never used")
 
 
 def _concat_entry(path: Path) -> str:

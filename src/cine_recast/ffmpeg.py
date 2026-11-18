@@ -15,6 +15,10 @@ from cine_recast.errors import CineRecastError
 Crop = tuple[int, int, int, int]
 
 
+class ToolNotFound(CineRecastError):
+    """ffmpeg or ffprobe is not on PATH: a fault of the machine, not of the file being read."""
+
+
 @dataclass(frozen=True)
 class VideoInfo:
     width: int
@@ -57,7 +61,7 @@ def _ffprobe(path: Path, args: list[str]) -> dict:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError as exc:
-        raise CineRecastError("ffprobe was not found on PATH") from exc
+        raise ToolNotFound("ffprobe was not found on PATH") from exc
     if proc.returncode != 0:
         raise CineRecastError(f"ffprobe failed for {path}: {_tail(proc.stderr)}")
     return json.loads(proc.stdout or "{}")
@@ -157,7 +161,7 @@ def run(args: list[str]) -> None:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError as exc:
-        raise CineRecastError("ffmpeg was not found on PATH") from exc
+        raise ToolNotFound("ffmpeg was not found on PATH") from exc
     if proc.returncode != 0:
         raise CineRecastError(f"ffmpeg failed: {_tail(proc.stderr)}")
 
@@ -209,7 +213,7 @@ def iter_frames(path: Path, *, size: tuple[int, int] | None = None, crop: Crop |
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
         except FileNotFoundError as exc:
-            raise CineRecastError("ffmpeg was not found on PATH") from exc
+            raise ToolNotFound("ffmpeg was not found on PATH") from exc
         assert proc.stdout is not None
         finished = False
         try:
