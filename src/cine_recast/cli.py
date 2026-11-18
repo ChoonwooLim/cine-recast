@@ -222,9 +222,24 @@ def _cmd_takes_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_takes_cuts(args: argparse.Namespace) -> int:
+    _print_json(conform.scan_take(Path(args.project), args.unit, args.take))
+    return 0
+
+
+def _parse_take_cuts(text: str) -> list[int]:
+    try:
+        return [int(part) for part in text.split(",")]
+    except ValueError as exc:
+        raise CineRecastError(f"--take-cuts must be whole take frame numbers separated by commas, e.g. "
+                              f"\"0,53,105\": {text}") from exc
+
+
 def _cmd_conform(args: argparse.Namespace) -> int:
-    paths = conform.conform(Path(args.project), args.unit, args.take, start_frame=args.start_frame,
-                            allow_retime=args.allow_retime)
+    options = {"start_frame": args.start_frame, "allow_retime": args.allow_retime}
+    if args.take_cuts is not None:
+        options["take_cuts"] = _parse_take_cuts(args.take_cuts)
+    paths = conform.conform(Path(args.project), args.unit, args.take, **options)
     for path in paths:
         print(path)
     return 0
@@ -422,6 +437,12 @@ def _build_parser() -> argparse.ArgumentParser:
     takes_select.add_argument("--unit", required=True)
     takes_select.add_argument("--take", required=True)
     takes_select.set_defaults(func=_cmd_takes_select)
+    takes_cuts = takes_sub.add_parser("cuts", help="print a take's frame count, hard cuts and held tail after the "
+                                                   "frame-rate conversion conform makes, as JSON")
+    takes_cuts.add_argument("project", help="project folder")
+    takes_cuts.add_argument("--unit", required=True)
+    takes_cuts.add_argument("--take", required=True)
+    takes_cuts.set_defaults(func=_cmd_takes_cuts)
 
     conform_p = sub.add_parser("conform", help="fit a take to the reference: one clip per shot, exact frame counts")
     conform_p.add_argument("project", help="project folder")
@@ -431,6 +452,10 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="take frame (after the frame-rate conversion) that becomes the unit's first frame")
     conform_p.add_argument("--allow-retime", action="store_true",
                            help="resample a take that is too short evenly to the unit's frame count")
+    conform_p.add_argument("--take-cuts",
+                           help="take frames (after the frame-rate conversion) where each shot of the unit starts, "
+                                "then the frame after its last shot, e.g. 0,53,105; each segment is resampled to its "
+                                "shot's frame count (not with --start-frame or --allow-retime)")
     conform_p.set_defaults(func=_cmd_conform)
 
     qc_p = sub.add_parser("qc", help="score a conformed take against the reference; write scores.json")

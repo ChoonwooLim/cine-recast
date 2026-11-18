@@ -1,6 +1,7 @@
-"""Find hard cuts: the frames where a new shot starts."""
+"""Find hard cuts (the frames where a new shot starts) and the held tail of a clip."""
 
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,8 @@ PEAK_RATIO = 3.0        # ... and by at least this many times the median of its 
 WINDOW = 8              # neighbours taken on each side of a frame for that median
 ISOLATION_FACTOR = 2.0  # a cut is a lone spike: rejects broad peaks such as a fast occluder sweep
 FLASH_FACTOR = 0.5      # a change that returns this close to the frame before it is a flash
+HOLD_DIFF = 1.5         # frames whose signatures differ by less than this are copies of one picture
+HOLD_MIN_RUN = 6        # a held tail shorter than this many frames is not reported
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,12 @@ def _mad(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.abs(a - b).mean())
 
 
+def _signatures(path: Path, box: PictureBox) -> Iterator[np.ndarray]:
+    """Each frame's picture area as a SIG_SIZE gray signature (int16, so differences do not wrap)."""
+    for frame in iter_frames(path, size=SIG_SIZE, crop=box.as_crop(), gray=True):
+        yield frame.astype(np.int16)
+
+
 def _measure(path: Path, box: PictureBox) -> tuple[list[float], list[float], list[float]]:
     """Per frame i: d[i] = mad(sig[i-1], sig[i]), back1[i] = mad(sig[i-1], sig[i+1]) and
     back2[i] = mad(sig[i-1], sig[i+2]). Values that do not exist are NaN.
@@ -44,8 +53,7 @@ def _measure(path: Path, box: PictureBox) -> tuple[list[float], list[float], lis
     back1: list[float] = []
     back2: list[float] = []
     recent: deque[np.ndarray] = deque(maxlen=4)
-    for t, frame in enumerate(iter_frames(path, size=SIG_SIZE, crop=box.as_crop(), gray=True)):
-        sig = frame.astype(np.int16)
+    for t, sig in enumerate(_signatures(path, box)):
         recent.append(sig)
         d.append(_mad(recent[-2], sig) if t >= 1 else float("nan"))
         back1.append(float("nan"))
@@ -90,6 +98,28 @@ def detect_cuts(path: Path, info: VideoInfo, box: PictureBox) -> list[int]:
             if back < FLASH_FACTOR * d[i]:     # NaN (no frame i+k) never compares true
                 flashes.update(range(i, i + k + 1))
     return [i for i in candidates if i not in flashes]
+
+
+def held_tail_start(path: Path, box: PictureBox) -> int | None:
+    """The first frame of the run of near-identical frames that lasts to the end of the clip, or
+    None when that run is shorter than HOLD_MIN_RUN frames (or the clip has no frames).
+
+    Walking back from the last frame, a frame stays in the run while the mean absolute difference
+    of its signature (the gray signature detect_cuts uses) to the next frame's is below HOLD_DIFF.
+    This finds the copies of one picture a model returns for the held end of a padded source.
+    """
+    d: list[float] = []         # d[i] = mad(sig[i], sig[i+1])
+    previous = None
+    for sig in _signatures(path, box):
+        if previous is not None:
+            d.append(_mad(previous, sig))
+        previous = sig
+    if previous is None:
+        return None
+    start = len(d)              # the last frame
+    while start > 0 and d[start - 1] < HOLD_DIFF:
+        start -= 1
+    return start if len(d) + 1 - start >= HOLD_MIN_RUN else None
 
 
 def shots_from_cuts(cuts: list[int], total_frames: int) -> list[Shot]:
