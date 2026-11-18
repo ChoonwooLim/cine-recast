@@ -9,8 +9,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 첫 위치 인자는 항상 프로젝트 폴더다.
 - 성공하면 종료 코드 0, 거부되거나 입력이 틀리면 2이고 이유가 `error:` 줄로 나온다. 1은 도구의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast` 한 줄). 환경 변수 `CINE_RECAST_DEBUG=1`을 두면 그 뒤에 추적 정보가 붙는다.
-- 프로젝트의 JSON 파일(`project.json`, `analysis/video.json`, `analysis/cuts.json`, `casting.json`, `models.json`, `plan.json`, `assets.json`)은 UTF-8로 읽고, 맨 앞의 BOM은 받아들인다. UTF-8이 아니거나 JSON이 깨졌으면 `error: casting.json is not valid JSON: ... at line 3, column 5`처럼 파일 이름(프로젝트 폴더 기준)과 줄과 칸이 나오고, 꼭 있어야 할 키가 없거나 맨 위가 객체가 아니면 파일 이름과 키가 나온다.
-- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `takes cuts`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
+- 프로젝트의 JSON 파일(`project.json`, `analysis/video.json`, `analysis/cuts.json`, `casting.json`, `models.json`, `plan.json`, `assets.json`, `sounds.json`, `out/soundtrack.json`)은 UTF-8로 읽고, 맨 앞의 BOM은 받아들인다. UTF-8이 아니거나 JSON이 깨졌으면 `error: casting.json is not valid JSON: ... at line 3, column 5`처럼 파일 이름(프로젝트 폴더 기준)과 줄과 칸이 나오고, 꼭 있어야 할 키가 없거나 맨 위가 객체가 아니면 파일 이름과 키가 나온다.
+- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `sound list`, `sound next`, `takes cuts`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
 - 예시의 id, 숫자, 경로는 예시다.
 
 ## 프로젝트 폴더 구조
@@ -23,6 +23,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   reference/source.mp4              init (참조 영상의 사본)
   analysis/
     video.json, cuts.json           analyze
+    audio.json                      analyze (원본 소리의 타이밍: 프레임마다의 음량과 소리가 터지는 프레임)
     shots/0001/ref.mp4              analyze (화면 영역만 잘라 낸 숏 클립)
     shots/0001/sheet.json           analyze (숏 시트)
     shots/0001/stills/first.png, mid.png, last.png
@@ -33,19 +34,25 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
   models.json                       에이전트가 쓴다
   assets.json                       assets add, set-cost, next, done, fail
   assets/hero/a0001_1.png           assets done (생성된 교체 자료)
-  plan.json                         plan build, plan unit. 프롬프트는 에이전트가 쓴다
+  plan.json                         plan build, plan unit, takes select, takes confirm. 프롬프트는 에이전트가 쓴다
   plans/plan-0001.json              plan build --replace가 보관한 이전 계획
-  ledger.jsonl                      approve, jobs next, jobs done, jobs fail, assets next, assets done, assets fail
+  sounds.json                       sound add, set-cost, next, done, fail, set
+  sounds/s0001.wav                  sound done (생성된 소리)
+  ledger.jsonl                      budget set, approve, jobs next, jobs done, jobs fail, assets next, assets done,
+                                    assets fail, sound next, sound done, sound fail
   ledger.lock                       장부를 쓰는 명령이 쓰는 동안 잡는 잠금 파일(지우지 않아도 된다)
   takes/u01/t001/raw.mp4, meta.json jobs done
   takes/u01/t001/shots/0001.mov, conform.json     conform
   takes/u01/t001/scores.json        qc
+  takes/u01/t001/review.mp4, review.jpg           takes review (원본이 들어 있는 검토용 파일)
+  out/preview.mp4                   assemble --preview
+  out/soundtrack.wav, soundtrack.json             sound mix
   out/master.mov, final.mp4         assemble
   out/compare.mp4                   compare
   out/report.md                     report
 ```
 
-`ledger.jsonl`, `ledger.lock`, `assets/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
+`ledger.jsonl`, `ledger.lock`, `assets/`, `sounds/`, `takes/`, `plans/`는 도구만 쓴다. 에이전트가 자기 용도로 만들어도 되는 폴더는 `swap/`(사용자가 준 교체 이미지), `downloads/`(생성 결과를 내려받는 곳), `review/`(검수용 스틸)다.
 
 ## 명령
 
@@ -85,7 +92,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr analyze $p --picture "0,46,640,268"
 ```
 
-- 쓰는 것: `analysis/video.json`(크기, 프레임 속도, 프레임 수, 화면 영역 `picture_box`와 그 출처 `picture_source`), `analysis/cuts.json`(컷 목록과 출처), `analysis/shots/NNNN/`의 `ref.mp4`, `sheet.json`, `stills/`.
+- 쓰는 것: `analysis/video.json`(크기, 프레임 속도, 프레임 수, 화면 영역 `picture_box`와 그 출처 `picture_source`), `analysis/cuts.json`(컷 목록과 출처), `analysis/audio.json`(원본 소리의 타이밍, 아래 "파일 형식"), `analysis/shots/NNNN/`의 `ref.mp4`, `sheet.json`, `stills/`. 숏 시트의 `audio_hits`에는 `audio.json`의 `hits` 가운데 그 숏 안의 프레임이 오름차순으로 들어간다(원본에 소리가 없으면 빈 목록).
 - 출력: `shots: 3  cuts: [30, 54]  picture: {'x': 0, 'y': 0, 'w': 384, 'h': 216}`.
 - `--cuts`: 검출 대신 쓸 컷 전체. 새 숏이 시작하는 프레임 번호를 오름차순으로 적는다. 컷이 하나도 없는 영상은 `--cuts ""`.
 - `--picture`: 검출 대신 쓸 화면 영역. 왼쪽 위 모서리의 x, y와 너비, 높이를 쉼표로 이어 적는다(원래 크기 프레임의 픽셀). 네 값 모두 짝수인 정수이고, 너비와 높이는 0보다 크며, 영역이 프레임 안에 있어야 한다. `--cuts`와 함께 쓸 수 있다. 생략하면 검출한다.
@@ -136,6 +143,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 출력: `models ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
+- `kind`는 `video`, `image`, `audio`다. 소리 모델(`audio`)은 `id`, `min_seconds`, `max_seconds`(0보다 큰 수, 최대가 최소 이상), `read_at`만 검사한다. `plan build`, `plan unit`은 영상 모델만, `assets add`는 이미지 모델만, `sound add`는 소리 모델만 받는다.
 
 ### assets add
 
@@ -256,7 +264,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 ### plan unit
 
-계획의 단위 하나를 지금 상태에 맞춘다. 실행할 때마다 단위의 입력을 지금의 교체표에서 다시 정하고, `--model`이나 `--method`를 주면 그 단위의 모델이나 방법을 바꾼다. 단위 id, 숏, 프레임, 프롬프트, `qc_skip`, 테이크, 고른 테이크는 그대로 남는다. 계획 전체를 다시 만들지 않으므로 다른 단위는 건드리지 않는다.
+계획의 단위 하나를 지금 상태에 맞춘다. 실행할 때마다 단위의 입력을 지금의 교체표에서 다시 정하고, `--model`이나 `--method`를 주면 그 단위의 모델이나 방법을 바꾼다. 단위 id, 숏, 프레임, 프롬프트, `qc_skip`, 테이크, 고른 테이크, 사용자 확정(`confirmed`)은 그대로 남는다. 고른 테이크의 화면은 바뀌지 않기 때문이다. 계획 전체를 다시 만들지 않으므로 다른 단위는 건드리지 않는다.
 
 ```powershell
 & $cr plan unit $p --unit u01
@@ -290,13 +298,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: `plan ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
 - 검사하는 것: 단위의 프롬프트가 비어 있지 않은 영어인지, 입력 파일이 있는지, 길이와 화면비와 해상도가 모델 범위 안인지, 견적 뒤에 `params`나 입력이 바뀌지 않았는지.
-- 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지, `pad_frames`가 있으면 0 이상의 정수인지(이 키가 없는 이전 계획은 통과한다). 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
+- 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지, `pad_frames`가 있으면 0 이상의 정수인지(이 키가 없는 이전 계획은 통과한다), `confirmed`가 있으면 `take`(테이크 id), `by`, `at`, `note`만 가진 객체인지(없어도 통과한다). 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
 - 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan unit <project> --unit u01`로 그 단위를 지금 교체표에 맞추라는 문제가 나온다(같은 문제에 적힌 `plan build --replace`는 모든 단위를 새 id로 다시 만드는 방법이다). 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
 - 모델: 단위마다 그 단위의 모델로 검사한다. 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
 
 ### plan show
 
-`plan.json`을 그대로 보여 준다. 단위의 `shots`, `start`, `end`, `method`, `model`, `params`, `prompt`, `inputs`, `qc_skip`, `selected_take`, `pad_frames`와 작업 목록이 있다.
+`plan.json`을 그대로 보여 준다. 단위의 `shots`, `start`, `end`, `method`, `model`, `params`, `prompt`, `inputs`, `qc_skip`, `selected_take`, `pad_frames`, 사용자가 확정했으면 `confirmed`, 그리고 작업 목록이 있다.
 
 ```powershell
 & $cr plan show $p
@@ -340,15 +348,28 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 ### approve
 
-묶음의 승인 한도를 장부에 기록한다. 사용자가 금액을 승인한 뒤에만 실행한다.
+묶음의 승인 한도를 장부에 기록한다. 사용자가 승인한 범위 안에서만 실행한다(SKILL.md의 "비용 승인": 프로젝트 예산 안의 견적 합계, 사용자가 말한 금액, 또는 사용자가 비용을 묻지 말라고 했을 때의 견적 합계).
 
 ```powershell
 & $cr approve $p --batch draft-1 --limit 80 --by owner --note "drafts for u01, one retry included"
 ```
 
-- 쓰는 것: `ledger.jsonl`. 출력: 기록한 뒤의 묶음 상태. `approved batch draft-1: +80.0 credits, limit now 80.0, committed 0.0, remaining 80.0 (by owner)`(이번에 더한 한도, 지금 한도, 쓴 크레딧과 끝나지 않은 작업의 견적, 남은 한도).
+- 쓰는 것: `ledger.jsonl`. 출력: 기록한 뒤의 묶음 상태. `approved batch draft-1: +80.0 credits, limit now 80.0, committed 0.0, remaining 80.0 (by owner)`(이번에 더한 한도, 지금 한도, 쓴 크레딧과 끝나지 않은 작업의 견적, 남은 한도). 프로젝트 예산이 있으면 둘째 줄에 `budget: limit 700.0, approved 80.0, remaining 620.0 (by owner)`(예산, 모든 묶음 한도의 합, 남은 예산)가 나온다.
 - 같은 묶음에 다시 실행하면 한도가 더해진다. 추가 승인에는 추가분만 적는다.
-- 거부: 장부가 손상돼 있다(`ledger line N is invalid`). 손상된 장부에는 아무것도 덧붙이지 않는다.
+- 거부: 장부가 손상돼 있다(`ledger line N is invalid`). 손상된 장부에는 아무것도 덧붙이지 않는다. 프로젝트 예산이 있는데 모든 묶음 한도의 합이 예산을 넘게 된다(`above the project budget`). 예산이 없으면 이 검사는 없다.
+
+### budget set
+
+프로젝트 예산을 장부에 기록한다. 사용자가 프로젝트 전체의 예산을 승인한 뒤에만 실행한다.
+
+```powershell
+& $cr budget set $p --limit 700 --by owner --note "whole project, approved in chat"
+```
+
+- 쓰는 것: `ledger.jsonl`에 `budget` 줄. 나중에 다시 실행하면 그 줄이 앞의 예산을 대신한다(올리거나 내릴 수 있다).
+- 출력: `budget: limit 700.0, approved 0.0, remaining 700.0 (by owner)`.
+- 예산이 있는 동안 `approve`는 모든 묶음 한도의 합이 예산을 넘게 되는 승인을 거부한다. 묶음의 한도와 `jobs next`, `assets next`, `sound next`의 검사는 그대로다.
+- 거부: 금액이 0보다 큰 유한한 수가 아니다. `--by`가 비어 있다. 장부가 손상돼 있다. `budget` 줄도 다른 줄처럼 엄격히 읽으므로, 손상된 `budget` 줄은 장부를 읽는 모든 명령을 멈춘다.
 
 ### jobs next
 
@@ -397,7 +418,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr audit $p
 ```
 
-- 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `totals`(모든 묶음의 `limit`, `committed`, `remaining` 합계), `provider_ids`(끝난 작업의 Higgsfield 작업 id).
+- 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `totals`(모든 묶음의 `limit`, `committed`, `remaining` 합계), `provider_ids`(끝난 작업의 Higgsfield 작업 id), `budget`(프로젝트 예산이 있으면 `{"limit": 700.0, "by": "owner", "approved": 80.0, "remaining": 620.0}`, 없으면 `null`). 승인한 순간의 예산을 넘긴 승인 줄은 `problems`에 나온다.
 - `ok`가 `false`면 종료 코드 2. `problems`에 `ledger line 16 is invalid: ...`처럼 문제 줄이 적힌다. UTF-8로 읽을 수 없는 줄도 문제 줄 하나로 적히고 나머지 줄은 그대로 읽힌다.
 
 ### takes cuts
@@ -408,13 +429,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr takes cuts $p --unit u01 --take t001
 ```
 
-- 출력: JSON. `frames`(프레임 속도를 바꾼 뒤의 테이크 프레임 수), `unit_frames`(단위의 프레임 수), `pad_frames`(계획에 적힌 붙인 프레임 수. 키가 없으면 0), `cuts`(분석과 같은 컷 검출로 테이크에서 찾은 컷 프레임), `tail_static_from`(끝까지 이어지는 거의 같은 프레임들의 첫 프레임. 없으면 `null`).
+- 출력: JSON. `frames`(프레임 속도를 바꾼 뒤의 테이크 프레임 수), `unit_frames`(단위의 프레임 수), `pad_frames`(계획에 적힌 붙인 프레임 수. 키가 없으면 0), `cuts`(분석과 같은 컷 검출로 테이크에서 찾은 컷 프레임), `tail_static_from`(끝까지 이어지는 멈춘 화면에서 앞 프레임의 사본인 첫 프레임, 곧 마지막 실제 프레임의 다음 프레임. 없으면 `null`).
 
   ```json
   {"frames": 97, "unit_frames": 30, "pad_frames": 66, "cuts": [], "tail_static_from": 33}
   ```
 - 프레임 번호는 `conform`의 `--start-frame`, `--take-cuts`와 같이 프레임 속도를 바꾼 뒤의 테이크 프레임이다. 이 번호로 프레임을 펼쳐 보는 명령은 아래 "테이크의 프레임 구간"에 있다.
-- `tail_static_from`: 마지막 프레임에서 거꾸로 가며, 다음 프레임과의 차이가 1.5 미만인 동안 같은 구간으로 본다. 차이는 컷 검출이 쓰는 64x36 회색 축소 화면의 평균 절대 차(0-255)다. 그 구간이 6프레임 이상일 때만 나온다. 패딩한 단위에서 모델이 돌려준 멈춘 끝을 찾는 데 쓴다. 움직임이 아주 느린 숏도 이 기준 아래로 내려가 멈춘 구간으로 잡힐 수 있으니 프레임을 보고 확인한다.
+- `tail_static_from`: 마지막 프레임에서 거꾸로 가며, 다음 프레임과의 차이가 0.25 미만인 동안 같은 구간으로 본다. 차이는 컷 검출이 쓰는 64x36 회색 축소 화면의 평균 절대 차(0-255)다. 사본끼리는 0.05 안팎이고, 느리게 움직이는 실제 숏도 프레임마다 0.6에서 1.3쯤 달라지므로 구간에 들지 않는다. 구간이 6프레임 이상일 때만 나오고(마지막 실제 프레임 포함), 값은 구간의 첫 프레임(마지막 실제 프레임)의 다음 프레임이다. 그래서 `--take-cuts "0,<tail_static_from>"`은 마지막 실제 프레임까지 쓰고 사본을 모두 뺀다. 패딩한 단위에서 모델이 돌려준 멈춘 끝을 찾는 데 쓴다.
 - 숏 하나인 단위의 테이크에 `cuts`가 있으면 모델이 원본에 없는 컷을 넣었거나 잘못된 컷을 남긴 것이고, 그 테이크는 쓸 수 없다.
 - 테이크 폴더에는 아무것도 쓰지 않는다. 바꾼 테이크는 임시 폴더에 두었다가 지운다.
 - 거부: 그런 테이크가 없다. 현재 계획에 없는 단위다.
@@ -431,9 +452,9 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 & $cr conform $p --unit u01 --take t001 --allow-retime
 ```
 
-- 쓰는 것: `takes/<단위>/<테이크>/shots/NNNN.mov`(ProRes), `conform.json`(`start_frame`, `retimed`, `source_frames`, `unit_frames`, 그리고 `--take-cuts`를 썼으면 `take_cuts`와 `segments`). 다시 실행하면 새로 만든다. `raw` 파일은 읽기만 한다.
+- 쓰는 것: `takes/<단위>/<테이크>/shots/NNNN.mov`(ProRes), `conform.json`(`start_frame`, `retimed`, `source_frames`, `unit_frames`, 그리고 `--take-cuts`를 썼으면 `take_cuts`와 `segments`). 다시 실행하면 새로 만든다. `raw` 파일은 읽기만 한다. 다시 맞추면 그 테이크의 `review.mp4`, `review.jpg`를 지우고, 그 테이크가 단위의 고른 테이크이면 단위의 사용자 확정(`confirmed`)도 지운다. 화면이 바뀌었으니 `takes review`부터 다시 한다.
 - 출력: 숏 클립의 경로를 한 줄에 하나씩.
-- `--take-cuts`: 단위의 숏마다 테이크에서 그 숏이 시작하는 프레임을 차례로, 끝에 마지막 숏이 끝난 다음 프레임을 적는다. 숏 수보다 하나 많은 정수를 쉼표로 잇고 따옴표로 감싼다. 번호는 `--start-frame`처럼 프레임 속도를 바꾼 뒤의 테이크 프레임이다(`takes cuts`의 번호와 같다). 구간 `[b_i, b_i+1)`이 i번째 숏의 클립이 되고, 구간의 프레임 수가 원본 숏과 다르면 `--allow-retime`과 같은 방식(구간 안에서 고르게, 처음과 끝 프레임을 모두 쓰는 표본)으로 늘리거나 줄여 맞추며, 같으면 프레임 하나하나 그대로 옮긴다. 테이크가 단위와 맞지 않을 때(프레임 수가 다르거나 컷이 어긋났을 때) 쓴다. 패딩한 단위의 끝 경계는 `tail_static_from`, 또는 프레임을 보고 정한, 화면이 멈추기 직전의 마지막 프레임이다.
+- `--take-cuts`: 단위의 숏마다 테이크에서 그 숏이 시작하는 프레임을 차례로, 끝에 마지막 숏이 끝난 다음 프레임을 적는다. 숏 수보다 하나 많은 정수를 쉼표로 잇고 따옴표로 감싼다. 번호는 `--start-frame`처럼 프레임 속도를 바꾼 뒤의 테이크 프레임이다(`takes cuts`의 번호와 같다). 구간 `[b_i, b_i+1)`이 i번째 숏의 클립이 되고, 구간의 프레임 수가 원본 숏과 다르면 `--allow-retime`과 같은 방식(구간 안에서 고르게, 처음과 끝 프레임을 모두 쓰는 표본)으로 늘리거나 줄여 맞추며, 같으면 프레임 하나하나 그대로 옮긴다. 테이크가 단위와 맞지 않을 때(프레임 수가 다르거나 컷이 어긋났을 때) 쓴다. 패딩한 단위의 끝 경계는 `tail_static_from`(마지막 실제 프레임의 다음 프레임)이다.
 - `--take-cuts`를 쓰면 `conform.json`의 `start_frame`은 첫 값, `take_cuts`는 준 값, `segments`는 숏마다 `{"shot": 2, "take_start": 88, "take_end": 129, "frames": 42, "retimed": true}`(숏 번호, 테이크 구간, 원본 숏의 프레임 수, 늘리거나 줄였는지)이고, `retimed`는 구간 하나라도 늘리거나 줄였으면 `true`다.
 - `--start-frame`: 프레임 속도를 바꾼 뒤의 테이크에서 단위의 첫 프레임이 될 프레임 번호. 기본 0. `--take-cuts` 없이 쓴다.
 - `--allow-retime`: 테이크가 단위보다 짧을 때 고르게 늘려 프레임 수를 맞춘다. 동작 속도가 달라진다. `--take-cuts` 없이 쓴다.
@@ -462,19 +483,50 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 쓰는 것: `plan.json`의 `selected_take`. 출력: `u01: selected take t001`.
+- 지금 고른 것과 다른 테이크를 고르면 그 단위의 사용자 확정(`confirmed`)이 지워진다. 같은 테이크를 다시 고르면 남는다.
+
+### takes review
+
+맞춘 테이크를 사용자가 원본과 견주어 볼 파일 두 개를 테이크 폴더에 만든다.
+
+```powershell
+& $cr takes review $p --unit u01 --take t001
+```
+
+- 쓰는 것: `takes/<단위>/<테이크>/review.mp4`(왼쪽이 원본, 오른쪽이 맞춘 테이크. 단위의 숏을 순서대로, 둘 다 화면 영역만, 원본과 같은 프레임 속도와 프레임 수, 소리 없음. 한쪽의 크기는 화면 영역의 크기이고, 높이가 540보다 크면 540으로 줄인다), `review.jpg`(숏마다 한 줄. 원본의 첫, 가운데, 끝 프레임과 테이크의 같은 세 프레임이 너비 320인 칸에 놓이고, 칸마다 숏 번호, `ref`나 `take`, 영화의 프레임 번호가 적힌다).
+- 출력: 두 파일의 경로를 한 줄에 하나씩.
+- 두 파일에는 원본 화면이 들어 있으므로 보기만 한다. `jobs done`, `assets done`, `sound done`, `assemble --audio`는 `takes/` 안의 파일을 받지 않는다. 테이크를 다시 맞추면 두 파일은 지워진다.
+- 거부: 그런 테이크가 없다. 테이크를 맞추지 않았다(`conform.json`이나 숏 클립이 없다). 현재 계획에 없는 단위다.
+
+### takes confirm
+
+사용자가 단위의 고른 테이크를 확정했다고 기록한다. 사용자가 그 숏을 받아들인다고 답했을 때만 실행한다.
+
+```powershell
+& $cr takes confirm $p --unit u01 --take t001 --by owner --note "accepted after review"
+```
+
+- 쓰는 것: `plan.json`의 그 단위에 `"confirmed": {"take": "t001", "by": "owner", "at": "2026-11-18T09:30:00Z", "note": "accepted after review"}`(`at`은 기록한 UTC 시각).
+- 출력: `u01: take t001 confirmed by owner`.
+- 확정이 지워지는 때: `takes select`로 다른 테이크를 고른다. 고른 테이크를 `conform`으로 다시 맞춘다. `plan build --replace`로 계획을 새로 만든다(새 단위에는 확정이 없다). `plan unit`은 지우지 않는다.
+- 거부: 그 테이크가 단위의 고른 테이크가 아니다. 테이크를 맞추지 않았다. `--by`가 비어 있다. 현재 계획에 없는 단위다.
 
 ### assemble
 
-단위마다 고른 테이크의 숏 클립을 원본 순서대로 이어 붙인다.
+단위마다 고른 테이크의 숏 클립을 원본 순서대로 이어 붙이고, 소리가 있으면 넣는다.
 
 ```powershell
 & $cr assemble $p
+& $cr assemble $p --preview
+& $cr assemble $p --silent
 & $cr assemble $p --audio "$p\audio\new_score.wav"
 ```
 
-- 쓰는 것: `out/master.mov`(ProRes), `out/final.mp4`. 출력: `final.mp4`의 경로.
-- `--audio`: 완성본에 넣을 오디오 파일. 원본의 소리는 쓰지 않는다. 생략하면 소리 없는 영상이 된다.
-- 거부: 고른 테이크가 없는 단위가 있다. 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다. `--audio`가 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/` 안에 있는 파일이거나(`out/compare.mp4`에는 원본의 소리가 들어 있고, 편집 모델의 테이크에도 남아 있을 수 있다), 바이트가 참조 영상과 같은 파일이다(`init`에 준 원본 파일도 여기서 걸린다). 완성본의 오디오는 완성본을 위해 만든 파일이어야 한다.
+- 쓰는 것: `out/master.mov`(ProRes, 소리가 있으면 24비트 PCM), `out/final.mp4`(H.264, 소리가 있으면 AAC 256 kb/s). 출력: `final.mp4`의 경로, 그리고 들어간 소리를 알리는 줄 하나(`sound: soundtrack (3 items)`, `sound: file new_score.wav`, `sound: none`).
+- 소리: `--silent`면 넣지 않는다. `--audio`를 주면 그 파일을 넣는다. 둘 다 없고 `out/soundtrack.wav`가 있으면 그것을 넣는다. 그 파일의 SHA-256이 `out/soundtrack.json`에 적힌 값과 다르면(믹스 뒤에 파일이 바뀌었으면) 거부한다. 사운드트랙이 없으면 소리 없는 영상이 된다. 넣은 소리는 영화 길이에 맞춰 자르거나 무음으로 채운다. 화면과 프레임 수 검사는 소리와 관계없이 같다.
+- `--preview`: 확정이 없어도 고른 테이크로 `out/preview.mp4`만 만든다(`master.mov`와 `final.mp4`는 만들지 않고, 프레임 수 검사는 한다). 사운드트랙은 있고 SHA-256이 맞을 때만 넣고, 맞지 않으면 빼고 만든다. `--audio`와 함께 쓰지 않는다.
+- `--silent`와 `--audio`는 함께 쓰지 않는다.
+- 거부: 고른 테이크가 없는 단위가 있다. 사용자가 확정하지 않은 단위가 있다(`--preview` 제외. 메시지가 그 단위들과 `takes review`, `takes confirm`을 알려 준다). 고른 테이크를 `conform`하지 않았다. 이어 붙인 프레임 수가 원본과 다르다. `out/soundtrack.wav`가 `sound mix`가 쓴 파일과 다르다(`run sound mix again`, `--preview` 제외). `--audio`가 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/` 안에 있는 파일이거나(`out/compare.mp4`에는 원본의 소리가 들어 있고, 편집 모델의 테이크에도 남아 있을 수 있다), 바이트가 참조 영상과 같은 파일이다(`init`에 준 원본 파일도 여기서 걸린다). 완성본의 오디오는 완성본을 위해 만든 파일이어야 한다.
 
 ### compare
 
@@ -487,6 +539,111 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 쓰는 것: `out/compare.mp4`. 왼쪽이 원본, 오른쪽이 완성본이고 원본에 소리가 있으면 그 소리가 들어간다. 검토용이다.
 - 거부: `out/final.mp4`가 없다.
 
+### sound add
+
+소리 생성 작업을 하나 계획하고 영화의 프레임에 놓는다. 소리 하나는 프롬프트 하나와 길이 하나로 부르는 생성 호출 하나다.
+
+```powershell
+& $cr sound add $p --kind sfx --label "door slam" --prompt "Heavy wooden door slams shut in a stone hallway, short echo." --model audio_model_x --seconds 3 --batch sound-1 --at-frame 54
+& $cr sound add $p --kind ambience --label "stone hall" --prompt "Quiet stone hall ambience, distant wind, faint dripping water." --model audio_model_x --seconds 12 --batch sound-1 --shot 2 --offset-frames -6 --gain-db -12
+& $cr sound add $p --kind music --label "main theme" --prompt "Slow orchestral underscore, low strings and soft French horn, rising tension." --model audio_model_x --seconds 30 --batch sound-1 --gain-db -8 --fade-in 2 --fade-out 3
+```
+
+- `--kind`: `music`(배경음악), `sfx`(효과음), `ambience`(배경 소리).
+- `--label`: 소리의 짧은 이름. 한국어도 되고 한자는 안 된다. `--prompt`: 영어. 소리 자체(재질, 동작, 공간, 세기)를 묘사하고, 작품, 작곡가, 연주자 이름이나 "누구 풍"은 쓰지 않는다.
+- `--model`: `models.json`의 소리 모델 id. `--seconds`: 모델에 요청할 길이. 모델의 `min_seconds`에서 `max_seconds` 사이여야 한다.
+- 시작: `--at-frame N`(영화의 프레임 N, 0부터) 또는 `--shot K`(숏 K의 첫 프레임)에 `--offset-frames F`(그 프레임에서 F만큼 옮긴다. 앞으로 당기면 음수)를 더한 프레임. 둘 다 없으면 0번 프레임이다. 시작 프레임은 0 이상이고 영화의 프레임 수보다 작아야 한다.
+- `--gain-db`: 믹스할 때의 음량, -60에서 12(기본 0). `--fade-in`, `--fade-out`: 페이드 길이(초, 기본 0과 0.2).
+- 쓰는 것: `sounds.json`. 출력: 소리 id(`s0001`). 한 번 쓴 id는 다시 쓰이지 않는다(장부에 있는 id도 센다).
+- 거부: 모르는 종류다. 프롬프트가 영어가 아니다. 이름이나 프롬프트에 한자가 있다. 모델이 `models.json`에 없거나 소리 모델이 아니다. 길이가 모델 범위 밖이다. 시작 프레임이 영화 밖이다. 그런 숏이 없다. `--offset-frames`를 `--shot` 없이 썼다. `--at-frame`과 `--shot`을 함께 썼다. 음량이나 페이드가 범위 밖이다. 거부되면 아무것도 쓰지 않는다.
+
+### sound list
+
+소리 작업과, 작업마다 실제로 보낼 `params`와 놓는 자리를 보여 준다. 가격을 물을 때 이 `params`를 쓴다.
+
+```powershell
+& $cr sound list $p
+```
+
+- 출력: JSON 목록. 항목마다 `id`, `kind`, `label`, `batch`, `state`(`planned`, `quoted`, `issued`, `done`, `failed`), `est_credits`, `params`(`model`, `prompt`, `duration`. `duration`은 `--seconds`), `at_frame`, `gain_db`, `fade_in`, `fade_out`, `muted`, `file`(등록된 파일. 없으면 `null`).
+- 내보낸 뒤의 작업은 내보낼 때 실제로 보낸 `params`가 나온다.
+
+### sound set-cost
+
+소리 작업의 견적을 기록한다. 견적은 모델과 길이에 묶인다(프롬프트와 놓는 자리는 묶이지 않는다).
+
+```powershell
+& $cr sound set-cost $p --sound s0001 --credits 4
+```
+
+- 출력: `s0001: quoted 4.0 credits`. 상태가 `quoted`가 된다. 내보내기 전에는 다시 실행해 견적을 바꿀 수 있다.
+- 거부: 이미 내보낸 작업이다. 크레딧이 0 이하다. `sound add`의 검사를 통과하지 못한다.
+
+### sound next
+
+묶음에서 견적이 있는 소리 작업을 id 순서로 장부에 올리고, 실행할 내용을 낸다. 같은 묶음의 영상 작업, 자료 작업과 한도를 함께 쓴다.
+
+```powershell
+& $cr sound next $p --batch sound-1
+```
+
+- 출력: JSON 목록. 항목마다 `{"job_id": "s0001", "kind": "sfx", "tool": "generate_audio", "params": {"model": "audio_model_x", "prompt": "...", "duration": 3}, "medias": []}`. 내보낼 것이 없으면 `[]`.
+- 한 번 내보낸 작업은 다시 나오지 않는다.
+- 거부(종료 코드 2): 묶음에 승인 기록이 없다. 견적을 더하면 한도를 넘는다. 견적 뒤에 모델이나 길이가 바뀌었다. `sound add`의 검사를 통과하지 못한다. 장부가 거부하기 전에 내보낸 작업이 있으면 그 목록은 그대로 출력된다.
+
+### sound done
+
+돌려받은 소리 파일을 등록하고 작업을 끝난 것으로 기록한다.
+
+```powershell
+& $cr sound done $p --sound s0001 --provider-id 4d2c8a10-6e3b-4f1a-9c7d-2b5e8f0a1c3d --credits 4 --file "$p\downloads\s0001.wav"
+```
+
+- `--file`: `.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac` 파일. `--provider-id`: Higgsfield의 작업 id. `--credits`: 실제로 차감된 크레딧.
+- 쓰는 것: `sounds/<소리 id><확장자>`(`sounds/s0001.wav`), `sounds.json`, `ledger.jsonl`. 장부에 `done`으로 기록된 소리의 파일은 바꾸지 않는다. 장부에 `done`이 없는데 그 id로 된 파일이 이미 있으면 앞서 끊긴 `sound done`이 남긴 것이므로 지우고 이번 파일을 저장한다.
+- 출력: `s0001: done, file sounds/s0001.wav`.
+- 거부: 내보낸 상태(`issued`)가 아니다. 파일이 없거나 확장자가 위의 것이 아니다. ffprobe가 읽을 수 있는 소리 스트림이 없다. 프로젝트의 `reference/`, `analysis/`, `takes/`, `out/`, `assets/`, `sounds/` 안에 있는 파일이다. 바이트가 참조 영상과 같은 파일이다. 생성 작업에서 내려받은 파일만 등록한다.
+
+### sound fail
+
+실패한 소리 작업을 기록한다.
+
+```powershell
+& $cr sound fail $p --sound s0002 --reason "provider error: timeout" --credits 0
+```
+
+- `--credits`: 실패했는데도 차감된 크레딧. 기본 0. 출력: `s0002: failed`. 다시 하려면 `sound add`로 새 작업을 만든다.
+
+### sound set
+
+소리의 시작 프레임, 음량, 페이드, 끄기를 바꾼다. 견적에 묶이지 않으므로 어느 상태에서든 언제나 바꿀 수 있고 비용이 들지 않는다. 주지 않은 값은 그대로 남는다.
+
+```powershell
+& $cr sound set $p --sound s0002 --at-frame 56 --gain-db -3
+& $cr sound set $p --sound s0003 --shot 3 --offset-frames 2 --fade-out 0.5
+& $cr sound set $p --sound s0001 --mute
+& $cr sound set $p --sound s0001 --unmute
+```
+
+- 출력: 소리의 자리 한 줄. `s0002: frame 56 (2.333 s), gain -3.0 dB, fade in 0.0 s, fade out 0.2 s`. 꺼진 소리는 끝에 `, muted`가 붙는다.
+- `--mute`: 믹스에서 뺀다. `--unmute`: 다시 넣는다. 둘을 함께 쓰지 않는다.
+- 바꾼 뒤에는 `sound mix`를 다시 해야 사운드트랙에 반영된다. `report`는 믹스 뒤에 바뀐 배치를 열린 항목에 적는다.
+- 거부: `sound add`와 같은 시작, 음량, 페이드 규칙에 맞지 않는다.
+
+### sound mix
+
+끝났고 끄지 않은 소리를 모두 제자리에 놓고 더해 사운드트랙을 만든다.
+
+```powershell
+& $cr sound mix $p
+```
+
+- 쓰는 것: `out/soundtrack.wav`(24비트 PCM, 48 kHz, 스테레오, 영화 길이와 샘플 단위까지 같다)와 `out/soundtrack.json`(아래 "파일 형식").
+- 방법: 소리마다 파일을 48 kHz 스테레오로 읽고, `seconds`보다 길면 자르고, 페이드를 걸고, `gain_db`만큼 키우거나 줄여 `at_frame`의 시각에 놓는다. 영화 끝을 넘는 부분은 50 ms 페이드로 자른다. 소리들은 서로 나누지 않고 그대로 더한다. 더한 소리의 통합 음량을 재어 고정 이득 하나로 -16 LUFS에 맞추고, 리미터로 최고 레벨을 -1 dBFS 아래로 누른다.
+- 원본 검사: 참조 영상에 소리가 있으면 믹스와 원본 소리를 모두 8 kHz 모노로 바꿔 앞뒤 0.5초 안의 정규화 상호상관 최댓값을 잰다. 0.5 이상이면 믹스에 원본의 소리가 들어 있는 것이므로 거부하고 아무 파일도 남기지 않는다. 그보다 작으면 값을 `reference_correlation`에 적는다. 원본에 소리가 없으면 `null`이다.
+- 출력: 첫 줄에 `soundtrack.wav`의 경로, 둘째 줄에 `loudness -16.0 LUFS  peak -3.2 dBFS  reference correlation 0.0312`(원본에 소리가 없으면 `reference correlation none (the reference has no sound)`).
+- 거부: 끝났고 끄지 않은 소리가 없다. 더한 소리가 완전한 무음이거나 음량을 잴 수 없을 만큼 작다. 끝난 소리의 파일이 없다. `sounds.json`의 자리 값이 규칙에 맞지 않는다(손으로 고친 경우). 믹스가 원본의 소리와 닮았다. 거부되면 사운드트랙을 쓰지 않는다.
+
 ### report
 
 한국어 보고서를 쓴다.
@@ -496,9 +653,11 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```
 
 - 숏별 결과의 모델은 고른 테이크를 실제로 만든 작업이 보낸 모델이다(`plan unit`으로 단위의 모델을 바꾼 뒤에도 그 테이크의 모델이 나온다). 고른 테이크가 없거나 작업을 알 수 없으면 단위의 지금 모델이다.
-- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 비용, 열린 항목(고른 테이크가 없는 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏). 마지막 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
+- 쓰는 것: `out/report.md`. 요약, 권리 확인, 교체표, 숏별 결과, 단위별 사용자 확인, 소리, 비용, 열린 항목(고른 테이크가 없는 단위, 사용자가 확인하지 않은 단위, 판정이 `retry`인 숏, 고른 테이크에서 `overlap_ratio`가 0.98 이상이라 화면이 원본과 거의 같은 숏, 내보냈지만 기록을 닫지 않은 소리, 사운드트랙 뒤에 바뀐 소리 배치). 원본과 거의 같은 숏의 항목은 판정을 바꾸지 않는다. 원본을 복사한 화면이 아닌지 사용자가 볼 목록이다.
 - 권리 확인: `yes`가 아닌 답에는 "확인 필요"가 붙는다. 다만 `likeness_consent`의 `not_applicable`은 도구가 확인할 수 있으면(교체하는 인물이 없거나, 인물 교체 이미지가 모두 참조 이미지 없이 생성한 파일) 붙지 않고 도구가 확인했다고 적힌다.
-- 비용: 묶음마다 한도, 사용, 잔액과 모든 묶음의 합계 줄, 그 아래 끝난 작업의 Higgsfield 작업 id 목록.
+- 단위별 사용자 확인: 단위마다 숏, 고른 테이크, 확정한 사용자와 시각(메모가 있으면 메모). 확정이 없거나 고른 테이크와 다른 테이크의 확정이면 "확인 안 함"이다.
+- 소리: 소리마다 id, 종류, 이름, 시작 프레임, 길이, 음량, 상태(꺼진 소리는 "음소거"). 사운드트랙이 있으면 음량, 최고 레벨, 원본 소리와의 상관, 컷마다 시작하는 소리. 사운드트랙의 배치가 지금의 `sounds.json`과 다르거나(믹스 뒤에 `sound set`을 했거나 소리가 더 끝났다) 파일이 믹스 기록과 다르면 열린 항목에 "sound mix를 다시 한다"가 적힌다.
+- 비용: 묶음마다 한도, 사용, 잔액과 모든 묶음의 합계 줄, 프로젝트 예산과 승인한 묶음 한도의 합과 남은 예산(예산이 없으면 "정하지 않음"), 그 아래 끝난 작업의 Higgsfield 작업 id 목록.
 - 계획의 일부만 끝난 상태에서도 쓸 수 있다.
 
 ## 파일 형식
@@ -549,7 +708,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적고, 단위의 모든 숏에 적용된다. 배경을 교체한 숏의 `color`는 도구가 자동으로 빼므로 적지 않아도 된다. 그 밖에 이유를 댈 수 있는 경우에 쓰고, 넣기 전에 사용자에게 알린다 |
 | `units[].params.duration` | 모델이 정해진 길이만 받을 때. 단위 길이보다 짧지 않은 허용 값으로 고친다. 견적 전에 고치고, 견적 뒤에 고쳤으면 다시 견적을 기록한다 |
 
-작업 목록, `state`, `est_credits`, `inputs`, `selected_take`, `pad_frames`, `model`, `method`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 바뀐 단위마다 `plan unit`을 한다. 단위의 모델이나 방법은 `plan unit --model`, `--method`로 바꾼다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
+작업 목록, `state`, `est_credits`, `inputs`, `selected_take`, `pad_frames`, `model`, `method`, `confirmed`는 손으로 고치지 않는다. `confirmed`는 `takes confirm`만 쓴다. 입력을 바꾸려면 `casting.json`을 고치고 바뀐 단위마다 `plan unit`을 한다. 단위의 모델이나 방법은 `plan unit --model`, `--method`로 바꾼다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
 
 ### 점수 읽기
 
@@ -568,6 +727,89 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 보고서의 숏별 표에서는 판정에서 뺀 점수 뒤에 `(제외)`가 붙는다.
 
+### sounds.json
+
+`sound` 명령들이 쓴다. 손으로 고치지 않는다. 놓는 자리는 `sound set`으로 바꾼다.
+
+```json
+{
+  "sounds": [
+    {"id": "s0001", "kind": "sfx", "label": "door slam",
+     "prompt": "Heavy wooden door slams shut in a stone hallway, short echo.", "model": "audio_model_x",
+     "seconds": 3, "batch": "sound-1", "state": "done", "est_credits": 4.0, "quote_digest": "...",
+     "sent_params": {"model": "audio_model_x", "prompt": "Heavy wooden door slams shut in a stone hallway, short echo.", "duration": 3},
+     "file": "sounds/s0001.wav", "at_frame": 54, "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.2, "muted": false}
+  ]
+}
+```
+
+| 키 | 뜻 |
+| --- | --- |
+| `id` | `s`와 숫자. 영상 작업 id, 자료 id와 같은 장부를 쓴다 |
+| `kind`, `label`, `prompt`, `model`, `seconds`, `batch` | `sound add`에 준 값. `seconds`가 생성 호출의 `duration`으로 나간다 |
+| `state`, `est_credits`, `quote_digest`, `sent_params` | 생명주기. 상태는 장부가 정하고, 견적은 모델과 길이에 묶인다 |
+| `file` | `sound done`이 저장한 파일. 끝나기 전에는 `null` |
+| `at_frame` | 소리가 시작하는 영화의 프레임(0 이상, 프레임 수 미만) |
+| `gain_db` | 믹스 음량, -60에서 12 |
+| `fade_in`, `fade_out` | 페이드 길이(초, 0 이상) |
+| `muted` | `true`면 믹스에서 뺀다 |
+
+### analysis/audio.json
+
+`analyze`가 쓴다. 원본 소리의 타이밍이고 소리 자체가 아니다. 이 파일로 원본의 소리를 되살릴 수 없다.
+
+```json
+{
+  "has_audio": true,
+  "frames": 72,
+  "rms_db": [-90.0, -90.0, -38.21, -61.5],
+  "hits": [55, 10, 30],
+  "shots": [
+    {"shot": 1, "start": 0, "end": 30, "mean_db": -42.17, "hits": [10]},
+    {"shot": 2, "start": 30, "end": 72, "mean_db": -39.8, "hits": [30, 55]}
+  ]
+}
+```
+
+| 키 | 뜻 |
+| --- | --- |
+| `has_audio` | 참조 영상에 소리 스트림이 있는가. 없으면 `false`이고 목록은 모두 비어 있다 |
+| `frames` | 영화의 프레임 수 |
+| `rms_db` | 영화의 프레임마다 그 프레임 동안의 소리(모노)의 RMS 음량(dBFS). 가장 낮은 값은 -90이다 |
+| `hits` | 소리가 크게 터지는 프레임. 음량이 앞 6프레임 평균보다 9 dB 이상 뛴 프레임 가운데 서로 6프레임 이상 떨어진 것을, 크게 뛴 것부터 40개까지 |
+| `shots` | 숏마다 첫 프레임, 끝 다음 프레임, 숏 전체 소리의 RMS 음량(`mean_db`), 숏 안의 `hits`(오름차순) |
+
+### out/soundtrack.json
+
+`sound mix`가 쓴다. `assemble`은 `soundtrack.wav`의 SHA-256이 이 파일의 `sha256`과 같을 때만 사운드트랙을 넣는다.
+
+```json
+{
+  "sounds": [
+    {"id": "s0001", "kind": "sfx", "label": "door slam", "start_seconds": 2.25, "at_frame": 54, "seconds": 3,
+     "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.2}
+  ],
+  "loudness_before": -23.4,
+  "gain_applied_db": 7.4,
+  "loudness_after": -16.02,
+  "peak_dbfs": -3.18,
+  "duration_seconds": 3.75,
+  "sha256": "9f2c...",
+  "reference_correlation": 0.0312,
+  "cuts": [{"frame": 30, "sounds": []}, {"frame": 54, "sounds": ["s0001"]}]
+}
+```
+
+| 키 | 뜻 |
+| --- | --- |
+| `sounds` | 믹스에 놓인 소리(끝났고 끄지 않은 것)와 그 자리. `start_seconds`는 `at_frame`을 초로 바꾼 값이다 |
+| `loudness_before`, `gain_applied_db`, `loudness_after` | 더한 소리의 통합 음량(LUFS), 걸어 준 고정 이득(dB), 리미터를 거친 결과의 통합 음량 |
+| `peak_dbfs` | 결과의 최고 샘플 레벨(dBFS). -1 이하다 |
+| `duration_seconds` | 사운드트랙의 길이. 영화의 길이와 같다 |
+| `sha256` | `soundtrack.wav`의 SHA-256 |
+| `reference_correlation` | 원본 소리와의 상관(0.5 미만). 원본에 소리가 없으면 `null` |
+| `cuts` | 영화의 컷마다 그 컷의 앞뒤 2프레임 안에서 시작하는 소리의 id |
+
 ## 검수용 스틸
 
 영상은 스틸 띠로 만들어서 본다. 결과 이미지는 프로젝트의 `review/` 폴더에 둔다. 폴더는 먼저 만든다.
@@ -582,7 +824,7 @@ New-Item -ItemType Directory -Force "$p\review" | Out-Null
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\raw.mp4" -vf "select='not(mod(n\,12))',scale=320:-2,tile=8x2" -frames:v 1 -update 1 "$p\review\u01_t001_raw.png"
 ```
 
-**테이크의 프레임 구간.** `takes cuts`가 보고한 번호 둘레를 펼쳐 숏의 경계를 정할 때 쓴다. 앞의 `fps=24000/1001`은 원본의 프레임 속도(`analysis/video.json`의 `fps_num`/`fps_den`)로 바꾼다. 먼저 이것으로 바꿔야 칸의 프레임 번호가 `takes cuts`와 `--take-cuts`의 번호와 같다. 프레임 84부터 95까지 열두 장이 왼쪽 위부터 차례로 놓인다. 컷 둘레면 장면이 바뀌는 칸의 번호가 다음 숏이 시작하는 경계다. 패딩한 단위의 테이크는 끝에 멈춘 화면이 이어지므로 `tail_static_from` 둘레를 펼쳐, 화면이 멈추기 직전의 마지막 프레임을 찾는다. 그것이 끝 경계다.
+**테이크의 프레임 구간.** `takes cuts`가 보고한 번호 둘레를 펼쳐 숏의 경계를 정할 때 쓴다. 앞의 `fps=24000/1001`은 원본의 프레임 속도(`analysis/video.json`의 `fps_num`/`fps_den`)로 바꾼다. 먼저 이것으로 바꿔야 칸의 프레임 번호가 `takes cuts`와 `--take-cuts`의 번호와 같다. 프레임 84부터 95까지 열두 장이 왼쪽 위부터 차례로 놓인다. 컷 둘레면 장면이 바뀌는 칸의 번호가 다음 숏이 시작하는 경계다. 패딩한 단위의 테이크는 끝에 멈춘 화면이 이어지므로 `tail_static_from` 둘레를 펼쳐, 마지막 실제 프레임이 `tail_static_from`의 바로 앞 프레임인지 확인한다. 끝 경계는 마지막 실제 프레임의 다음 프레임(보통 `tail_static_from`)이다.
 
 ```powershell
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u03\t001\raw.mp4" -vf "fps=24000/1001,select='between(n\,84\,95)',scale=320:-2,tile=6x2" -frames:v 1 -update 1 "$p\review\u03_t001_0084-0095.png"
