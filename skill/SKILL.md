@@ -136,9 +136,11 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 사용자가 교체 이미지를 준 요소: 이미지를 프로젝트의 `swap/` 폴더에 복사하고 `swaps`에 적는다.
 - 교체 이미지가 없는 요소: 이미지 생성 모델로 만든다. 이미지 모델이 든 `models.json`이 먼저 있어야 하므로 4단계의 `models.json` 작성을 앞당겨 한다.
+- 여러 방향에서 보이는 인물이나 크리처: 요소마다 그 대상을 여러 각도에서 담은 참조 시트를 한 장 만들고, 그 시트를 교체 이미지로 쓴다. 인물이면 정면, 4분의 3 측면, 옆모습, 크게 잡은 얼굴을 담고, 크리처면 옆, 앞, 위, 머리를 담는다. 사용자가 준 이미지를 `--ref`로 넣어 `assets add`로 만든다. 정면 한 장만으로는 다른 각도에서 찍은 숏의 얼굴과 모습을 모델이 지키지 못한다.
 
 ```powershell
 & $cr assets add $p --element hero --prompt "Full-body studio portrait of a fictional woman in her twenties, short black hair, olive field jacket, plain grey backdrop, soft even light." --model image_model_x --batch assets-1 --count 2
+& $cr assets add $p --element hero --prompt "Character reference sheet of the person in the reference image on a plain grey backdrop: front view, three-quarter view, profile and a large close-up of the face, the same clothes in every view, soft even light." --model image_model_x --batch assets-1 --aspect-ratio 16:9 --ref swap/person_front.jpg
 & $cr assets list $p
 ```
 
@@ -163,19 +165,22 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
    ```powershell
    & $cr models check $p
    ```
-2. 숏을 생성 단위로 묶고 단위마다 초안 작업을 하나씩 만든다.
+2. 이 프로젝트에서 처음 다루는 종류의 영상이면, 나머지를 계획하기 전에 후보 모델부터 비교한다(workflow.md의 "후보 모델 비교"). 교체할 인물이 화면에서 가장 크게 나오는 숏 한두 개를 후보마다 만들어 본다. 비교하는 것은 네 가지다. 교체 이미지와 같은 사람으로 보이는가, 모든 숏에서 같은 디자인인가, 숏과 카메라가 원본 그대로인가, 타이밍이 맞는가.
+3. 숏을 생성 단위로 묶고 단위마다 초안 작업을 하나씩 만든다. `edit`에서는 숏 하나를 단위 하나로 만드는 `--per-shot`을 기본으로 쓴다.
 
    ```powershell
-   & $cr plan build $p --model seedance_2_5 --method edit --batch draft-1
+   & $cr plan build $p --model seedance_2_5 --method edit --batch draft-1 --per-shot
    ```
 
-   `edit`는 원본 숏을 편집 모델에 넣어 지정한 요소만 바꾸는 방법이고, `regen`은 숏의 첫 스틸과 교체 이미지를 참조로 처음부터 생성하는 방법이다. 출력은 `u01: shots [1, 2, 3]  frames 0-90  duration 4 s` 같은 단위별 줄과 `planned jobs: j0001 (batch draft-1)`이다. 단위는 생성 호출 한 번으로 만드는 연속한 숏 묶음이다. 어떤 방법과 모델이 나은지 모르면 숏 한두 개로 후보를 비교한다(workflow.md의 "후보 모델 비교").
-3. `plan.json`의 단위마다 `prompt`를 쓰고(아래 "프롬프트 작성") 검사한다. `plan ok`가 나와야 한다.
+   `edit`는 원본 숏을 편집 모델에 넣어 지정한 요소만 바꾸는 방법이고, `regen`은 숏의 첫 스틸과 교체 이미지를 참조로 처음부터 생성하는 방법이다. 단위는 생성 호출 한 번으로 만드는 연속한 숏 묶음이다. 실제 생성에서 모델은 숏이 여럿인 단위 안의 숏을 다른 화면으로 바꾸거나, 빼먹고 이웃 숏을 늘리기도 했다. 숏 하나인 단위에는 섞이거나 늘어날 이웃 숏이 없다. 숏 여럿을 한 단위로 묶는 것(`--per-shot` 없이 실행)은 고른 모델이 단위 안의 숏을 따로 지킨다는 것을 시험으로 확인한 경우에만 한다.
+
+   출력은 `u01: shots [1]  frames 0-30  duration 4 s  padded +66 frames` 같은 단위별 줄과 `planned jobs: j0001, j0002, j0003 (batch draft-1)`이다. 모델은 원본 영상의 최소 길이(`min_seconds`)를 정해 둔다. `edit` 단위가 그보다 짧으면 도구가 단위의 참조 클립 뒤에 마지막 프레임을 이어 붙여 최소 길이를 채우고, 붙인 프레임 수를 줄 끝(`padded +66 frames`)과 단위의 `pad_frames`에 적는다. 붙인 프레임은 완성본에 들어가지 않는다. 그런 단위의 테이크는 끝에 멈춘 화면이 이어지기 쉬우므로, 6단계에서 숏이 끝나는 프레임을 경계로 정한다.
+4. `plan.json`의 단위마다 `prompt`를 쓰고(아래 "프롬프트 작성") 검사한다. `plan ok`가 나와야 한다.
 
    ```powershell
    & $cr plan check $p
    ```
-4. 가격을 받아 기록하고 "비용 승인" 절차로 승인받는다.
+5. 가격을 받아 기록하고 "비용 승인" 절차로 승인받는다.
 
    ```powershell
    & $cr jobs list $p
@@ -198,11 +203,35 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 ### 6. 맞춤
 
+테이크는 프레임 수가 정확히 맞아 오는 일이 드물다. 실제 생성에서 테이크는 단위보다 몇 프레임 짧거나 긴 채로, 원본과 다른 프레임 속도로 돌아왔고, 테이크 안의 컷은 원본의 컷에서 몇 프레임씩 어긋나 있었다. 그래서 `jobs done` 뒤에 테이크에서 숏의 경계부터 찾는다.
+
+```powershell
+& $cr takes cuts $p --unit u01 --take t001
+```
+
+```json
+{"frames": 97, "unit_frames": 30, "pad_frames": 66, "cuts": [], "tail_static_from": 33}
+```
+
+`frames`는 원본의 프레임 속도로 바꾼 뒤의 테이크 프레임 수, `unit_frames`는 단위의 프레임 수, `pad_frames`는 단위의 참조 클립에 붙인 프레임 수, `cuts`는 테이크 안에서 찾은 컷, `tail_static_from`은 끝까지 이어지는 멈춘 화면이 시작하는 프레임이다(없으면 `null`). 번호는 모두 프레임 속도를 바꾼 뒤의 테이크 프레임이다. 보고된 번호 둘레의 프레임을 펼쳐 보고(workflow.md의 "테이크의 프레임 구간") 숏마다 테이크에서 시작하는 프레임을 정한 뒤, 그 경계로 맞춘다.
+
+```powershell
+& $cr conform $p --unit u01 --take t001 --take-cuts "0,33"
+```
+
+`--take-cuts`에는 단위의 숏마다 테이크에서 그 숏이 시작하는 프레임을 차례로 적고, 끝에 마지막 숏이 끝난 다음 프레임을 적는다. 값은 숏 수보다 하나 많다(숏 둘인 단위면 `"0,88,129"`). 구간의 프레임 수가 원본 숏과 다르면 고르게 늘리거나 줄여 원본 숏의 프레임 수에 맞추고, 같으면 그대로 옮긴다.
+
+- 패딩한 단위(`pad_frames`가 0보다 크다)의 끝 경계는 `tail_static_from`, 또는 프레임을 보고 정한, 화면이 멈추기 직전의 마지막 프레임이다. 움직임이 아주 느린 숏도 멈춘 화면으로 잡혀 `tail_static_from`이 숏의 앞쪽에 나올 수 있으니, 숫자만 믿지 말고 프레임을 보고 정한다.
+- 숏 하나인 단위의 테이크에서 `cuts`가 나오면 모델이 원본에 없는 컷을 넣었거나 잘못된 컷을 남긴 것이다. 그 테이크는 쓸 수 없다.
+- 구간이 원본 숏보다 25퍼센트 넘게 길거나 짧으면 `conform`이 숏 번호와 두 프레임 수를 들어 거부한다. 경계를 잘못 정했거나, 모델이 숏을 바꾸거나 빼먹은 테이크다. 경계를 다시 보고, 맞으면 다시 생성한다.
+
+`conform`은 테이크를 원본과 같은 프레임 크기, 프레임 속도, 프레임 수로 맞춰 숏마다 `takes/u01/t001/shots/NNNN.mov`를 만든다. 붙인 프레임은 숏 클립에 들어가지 않는다. `--take-cuts` 없이 실행하면 테이크가 단위와 프레임 하나하나 맞는다고 보고 앞에서부터 자른다.
+
 ```powershell
 & $cr conform $p --unit u01 --take t001
 ```
 
-테이크를 원본과 같은 프레임 크기, 프레임 속도, 프레임 수로 맞춰 숏마다 `takes/u01/t001/shots/NNNN.mov`를 만든다. `take too short`가 나오면 테이크가 단위보다 짧은 것이다. 다시 생성하거나, 동작 속도가 달라지는 것을 감수하고 `--allow-retime`으로 고르게 늘린다. 테이크 앞에 원본에 없는 여분 프레임이 있으면 `--start-frame`으로 건너뛴다.
+이때 `take too short`가 나오면 테이크가 단위보다 짧은 것이다. 다시 생성하거나, 동작 속도가 달라지는 것을 감수하고 `--allow-retime`으로 고르게 늘린다. 테이크 앞에 원본에 없는 여분 프레임이 있으면 `--start-frame`으로 건너뛴다. `--take-cuts`는 `--start-frame`, `--allow-retime`과 함께 쓰지 않는다.
 
 ### 7. 검수
 
@@ -267,20 +296,28 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 바꾸지 않는 주요 요소도 적는다. 프롬프트에서 "그대로 둘 것"을 가리킬 때와 보고서에 쓰인다.
 - `shots`에는 그 요소가 보이는 숏을 빠짐없이 적는다. 빠뜨린 숏의 생성에는 교체 이미지가 입력으로 들어가지 않는다.
 - `look`에는 원본에서 보이는 모습을 영어로 적는다(`teenage boy, tousled brown hair, green wool tunic`). 프롬프트에서 누구를 바꾸는지 가리키는 말이 된다. 배우나 배역의 이름은 적지 않는다.
-- 인물 교체 이미지는 얼굴이 또렷한 정면 사진이 좋다. 교체 이미지 수는 모델이 받는 이미지 수(`image_refs`)를 넘을 수 없다.
+- 인물 교체 이미지는 얼굴이 또렷해야 한다. 여러 방향에서 보이는 인물과 크리처는 정면 사진 한 장 대신 요소마다 여러 각도를 담은 참조 시트 한 장을 교체 이미지로 쓴다(3단계). 정면 한 장만 주면 옆이나 뒤에서 찍은 숏에서 모델이 모습을 지어낸다. 교체 이미지 수는 모델이 받는 이미지 수(`image_refs`)를 넘을 수 없다.
 - `assets/` 폴더에는 손으로 파일을 넣지 않는다. 도구가 생성물만 두는 곳이다.
 
 ### 프롬프트 작성
 
-단위의 프롬프트는 그 단위의 숏 전체에 대한 영어 지시다. `plan show`에서 단위의 `shots`와 `inputs`를 보고 쓴다. `edit` 작업의 좋은 프롬프트에는 다음이 들어 있다.
+단위의 프롬프트는 그 단위의 숏에 대한 영어 지시다. `plan show`에서 단위의 `shots`와 `inputs`를 보고 쓴다. 숏 하나인 단위면 그 숏만 묘사한다. 다른 숏의 내용을 적으면 모델이 그 화면을 끌어올 수 있다. `edit` 작업의 좋은 프롬프트에는 다음이 들어 있다.
 
 1. **무엇을 바꾸는지**: 원본의 누구(`look`의 말로 가리킨다)를 몇 번째 참조 이미지의 인물로, 어느 배경을 몇 번째 참조 이미지로. 참조 이미지의 순서는 `inputs`에 적힌 순서다.
 2. **무엇을 그대로 두는지**: 카메라 움직임, 구도, 동작과 연기, 타이밍, 컷 위치, 조명과 색, 바꾸지 않는 인물과 크리처와 소품. 의상은 사용자가 따로 지정하지 않았으면 원본을 따른다고 적는다.
-3. **숏별 차이**: 단위에 숏이 여럿이면 교체 대상이 나오지 않는 숏을 짚어 그대로 두라고 적는다.
-4. **배경의 어울림**: 교체 배경은 각 숏의 원근과 빛에 맞추라고 적는다.
+3. **헷갈릴 수 있는 것**: 교체 대상과 혼동될 수 있는 것(두 번째 크리처, 다른 사람들)은 그것을 가리켜 바꾸지 말라고 적는다.
+4. **교체가 없는 숏**: 교체할 요소가 나오지 않는 숏의 단위에는 그 숏을 그대로 두라는 프롬프트를 쓴다. 단위에 숏이 여럿이면 그런 숏을 짚어 그대로 두라고 적는다.
+5. **원치 않는 표시**: 화면 구석의 채널 로고 같은 표시는 위치와 함께 적고 지우라고 적는다.
+6. **배경의 어울림**: 교체 배경은 숏의 원근과 빛에 맞추라고 적는다.
 
 ```text
-Replace the teenage boy riding the dragon with the woman shown in the first reference image, and keep his green tunic and leather vest on her. Replace the smoky grey sky with the sunset sky from the second reference image, matched to the perspective and light of each shot. Keep everything else exactly as in the source video: camera movement, framing, the dragon, every action and its timing, and both cuts on the same frames. The second shot shows neither the rider nor the sky; leave it unchanged.
+Replace the teenage boy riding the dragon with the woman shown in the first reference image, and keep his green tunic and leather vest on her. Replace the smoky grey sky with the sunset sky from the second reference image, matched to the perspective and light of the shot. Do not replace the dragon he rides or the second dragon flying behind it. Keep everything else exactly as in the source video: camera movement, framing, every action and its timing. Remove the small red logo in the top-left corner.
+```
+
+교체가 없는 숏의 단위에는 이렇게 쓴다.
+
+```text
+Keep this shot exactly as it is in the source video: the same people, place, camera movement, framing, actions and timing. Change nothing. Remove the small red logo in the top-left corner.
 ```
 
 `regen` 작업에는 원본 영상이 입력으로 들어가지 않으므로 숏의 내용을 글로 다 적는다. 피사체, 동작의 순서, 카메라 움직임, 구도, 빛을 적고, 첫 참조 이미지(원본 스틸)는 구도 참조로만 쓰라고 적는다. 자료 이미지의 프롬프트는 인물이면 나이대, 체형, 머리, 의상, 단색 배경, 고른 빛, 또렷한 얼굴을 적고, 배경이면 장소, 시간대, 빛의 방향, 원본 숏과 비슷한 카메라 높이를 적으며 사람과 글자가 없게 한다.
@@ -291,8 +328,8 @@ Replace the teenage boy riding the dragon with the woman shown in the first refe
 
 점수가 재는 것은 카메라 움직임, 화면 속 움직임, 색, 깜빡임뿐이다. 누가 나오는지, 배경이 교체 이미지와 같은지, 단위 안의 컷이 제자리인지, 얼굴과 손이 뭉개졌는지는 재지 않는다. 그래서 점수를 믿기 전에 스틸로 다음을 확인한다.
 
-1. **`jobs done` 직후, 맞추기 전**: 테이크(`takes/u01/t001/raw.mp4`)의 스틸 띠를 본다. 올바른 숏인가, 첫 프레임이 원본의 첫 프레임과 같은 순간인가, 검은 화면이나 오류 화면은 아닌가.
-2. **`conform` 뒤, 숏 클립마다**: 첫 프레임과 끝 프레임이 원본 스틸 `first.png`, `last.png`와 같은 순간인가. 이웃 숏의 화면이 섞여 있으면 단위 안의 컷이 어긋난 것이고, 그 테이크는 쓸 수 없다. 거듭 어긋나면 `plan build --max-unit-seconds`로 단위를 짧게 나눠 다시 계획한다.
+1. **`jobs done` 직후, 맞추기 전**: 테이크(`takes/u01/t001/raw.mp4`)의 스틸 띠와 `takes cuts`의 출력을 본다. 올바른 숏인가, 첫 프레임이 원본의 첫 프레임과 같은 순간인가, 검은 화면이나 오류 화면은 아닌가, 숏이 다른 화면으로 바뀌거나 빠지거나 늘어나지 않았는가.
+2. **`conform` 뒤, 숏 클립마다**: 첫 프레임과 끝 프레임이 원본 스틸 `first.png`, `last.png`와 같은 순간인가. 이웃 숏의 화면이 섞여 있으면 경계가 어긋난 것이다. 테이크의 프레임 구간을 다시 보고 `--take-cuts`를 고쳐 다시 맞춘다. 숏 여럿인 단위에서 숏이 거듭 바뀌거나 빠지면 `plan build --per-shot`으로 다시 계획한다.
 3. **교체한 것**: 인물이 교체 이미지와 같은 사람으로 보이는가, 모든 숏에서 같은 사람인가. 배경이 교체 이미지와 맞고 같은 장면의 숏끼리 이어지는가.
 4. **그대로 둔 것**: 바꾸지 않은 인물, 크리처, 소품, 의상이 원본과 같은가.
 5. **깨진 곳**: 얼굴과 손의 뭉개짐, 깜빡임, 엉뚱한 글자, 워터마크.
@@ -307,8 +344,8 @@ Replace the teenage boy riding the dragon with the woman shown in the first refe
 | `failed` | 스틸에서 볼 것 | 조치 |
 | --- | --- | --- |
 | `timing` | 숏 클립의 프레임 수가 원본과 다르다 | `conform`을 다시 한다 |
-| `camera` | 화면의 이동과 줌이 원본과 같은 방향, 같은 크기인가 | 움직임은 같은데 시점이 밀렸으면 `--start-frame`을 바꿔 다시 맞춘다. 움직임 자체가 다르면 프롬프트에 카메라 움직임을 명시해 다시 생성한다 |
-| `motion` | 인물과 사물의 동작이 같은 때에 같은 방향으로 일어나는가 | `--allow-retime`으로 늘린 테이크면 그것이 원인일 수 있다. 아니면 동작의 순서와 타이밍을 프롬프트에 적어 다시 생성한다 |
+| `camera` | 화면의 이동과 줌이 원본과 같은 방향, 같은 크기인가 | 움직임은 같은데 시점이 밀렸으면 `--take-cuts`의 경계(또는 `--start-frame`)를 바꿔 다시 맞춘다. 움직임 자체가 다르면 프롬프트에 카메라 움직임을 명시해 다시 생성한다 |
+| `motion` | 인물과 사물의 동작이 같은 때에 같은 방향으로 일어나는가 | `--allow-retime`으로 늘렸거나 `--take-cuts`로 구간을 크게 늘이고 줄인 테이크면 그것이 원인일 수 있다. 아니면 동작의 순서와 타이밍을 프롬프트에 적어 다시 생성한다 |
 | `color` | 배경을 교체한 숏의 `color`는 이미 판정에서 빠져 있으므로(`skipped`) 여기 오는 것은 배경 교체가 없는 숏이다. 교체한 인물(의상 등) 때문에 화면의 색이 달라진 것인가 | 교체의 당연한 결과이고 스틸이 의도대로면 사용자에게 알리고 그 단위의 `qc_skip`에 `"color"`를 넣은 뒤 `qc`를 다시 한다(`qc_skip`은 단위의 모든 숏에 적용된다). 교체와 무관하게 색이 변했으면 원본의 색과 빛을 유지하라고 적어 다시 생성한다 |
 | `flicker_ratio` | 프레임 사이에 밝기나 질감이 출렁이는가 | 다시 생성한다 |
 

@@ -10,7 +10,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 첫 위치 인자는 항상 프로젝트 폴더다.
 - 성공하면 종료 코드 0, 거부되거나 입력이 틀리면 2이고 이유가 `error:` 줄로 나온다. 1은 도구의 결함이다(`error: unexpected failure (...); this is a defect in cine-recast` 한 줄). 환경 변수 `CINE_RECAST_DEBUG=1`을 두면 그 뒤에 추적 정보가 붙는다.
 - 프로젝트의 JSON 파일(`project.json`, `analysis/video.json`, `analysis/cuts.json`, `casting.json`, `models.json`, `plan.json`, `assets.json`)은 UTF-8로 읽고, 맨 앞의 BOM은 받아들인다. UTF-8이 아니거나 JSON이 깨졌으면 `error: casting.json is not valid JSON: ... at line 3, column 5`처럼 파일 이름(프로젝트 폴더 기준)과 줄과 칸이 나오고, 꼭 있어야 할 키가 없거나 맨 위가 객체가 아니면 파일 이름과 키가 나온다.
-- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
+- `plan show`, `jobs list`, `jobs next`, `assets list`, `assets next`, `takes cuts`, `qc`, `audit`은 표준 출력에 JSON을 쓴다.
 - 예시의 id, 숫자, 경로는 예시다.
 
 ## 프로젝트 폴더 구조
@@ -27,7 +27,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
     shots/0001/sheet.json           analyze (숏 시트)
     shots/0001/stills/first.png, mid.png, last.png
     review/cut_0030.png, shot_0001.png      cuts review
-    units/u01/ref.mp4               plan build (단위의 참조 클립)
+    units/u01/ref.mp4               plan build (단위의 참조 클립. 짧은 edit 단위는 끝에 마지막 프레임을 이어 붙인다)
   casting.template.json             cast template
   casting.json                      에이전트가 쓴다. assets use가 swaps를 고친다
   models.json                       에이전트가 쓴다
@@ -231,18 +231,28 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 숏을 생성 단위로 묶고, 단위마다 참조 클립과 작업 하나를 만든다.
 
 ```powershell
+& $cr plan build $p --model seedance_2_5 --method edit --batch draft-1 --per-shot
 & $cr plan build $p --model seedance_2_5 --method edit --batch draft-1
 & $cr plan build $p --model seedance_2_5 --method regen --batch cmp-regen --max-unit-seconds 2 --replace
 ```
 
 - `--method edit`: 단위의 참조 클립(역할 `video`)과 교체 이미지를 입력으로 삼는다. 모델의 `video_ref`가 `true`여야 한다. `--method regen`: 단위 첫 숏의 첫 스틸(역할 `image`)과 교체 이미지를 입력으로 삼는다.
 - `--quality`: 처음 만드는 작업의 품질. 기본 `draft`.
+- `--per-shot`: 숏마다 단위를 하나씩, 숏 순서대로 만든다. `edit`에서는 이것을 기본으로 쓴다. 실제 생성에서 모델은 숏이 여럿인 단위 안의 숏을 다른 화면으로 바꾸거나, 빼먹고 이웃 숏을 늘리기도 했다. 숏 여럿을 한 단위로 묶는 것은 고른 모델이 단위 안의 숏을 따로 지킨다는 것을 시험으로 확인한 경우에만 한다. `--max-unit-seconds`와 함께 쓰지 않는다.
 - `--max-unit-seconds`: 단위 길이의 상한(초). 생략하면 모델의 `max_seconds`. 이어지는 숏을 합친 길이가 상한 이하인 동안 한 단위에 담는다.
 - `--replace`: 계획이 이미 있을 때 다시 만든다. 이전 계획은 `plans/plan-NNNN.json`으로 보관되고, 새 단위와 작업은 지금까지 쓴 적 없는 id를 받는다.
 - 쓰는 것: `plan.json`, `analysis/units/<단위>/ref.mp4`.
-- 출력: `u01: shots [1, 2, 3]  frames 0-90  duration 4 s` 같은 단위별 줄과 `planned jobs: j0001 (batch draft-1)`.
+- 패딩: `edit` 단위의 길이(단위의 프레임 수를 원본의 프레임 속도로 나눈 값)가 모델의 `min_seconds`보다 짧으면, 참조 클립에 단위의 프레임을 넣고 그 뒤에 마지막 프레임의 사본을 이어 붙여 모두 `ceil(min_seconds * 프레임 속도)` 프레임으로 만든다(23.976fps에서 3초면 72프레임). 모델이 받는 원본 영상의 최소 길이를 채우기 위해서다. 붙인 수는 단위의 `pad_frames`에 적히고(붙이지 않았으면 0) 그 단위의 출력 줄 끝에 `  padded +66 frames`처럼 나온다. 길이가 충분한 단위와 `regen` 단위에는 붙이지 않는다. 붙인 프레임은 완성본에 들어가지 않는다. `conform`은 언제나 원본 숏의 프레임 수만큼 숏 클립을 만든다.
+- 출력: 단위마다 한 줄과 마지막의 작업 줄. `--per-shot`으로 숏 셋(30, 24, 36프레임, 24fps)을 `min_seconds` 4인 모델로 계획하면 다음과 같다. 패딩하지 않은 단위의 줄은 `duration 4 s`에서 끝난다.
+
+  ```text
+  u01: shots [1]  frames 0-30  duration 4 s  padded +66 frames
+  u02: shots [2]  frames 30-54  duration 4 s  padded +72 frames
+  u03: shots [3]  frames 54-90  duration 4 s  padded +60 frames
+  planned jobs: j0001, j0002, j0003 (batch draft-1)
+  ```
 - 단위의 `duration`은 단위 길이를 초로 올림한 값이고 모델의 `min_seconds`보다 작지 않다. 그래서 테이크가 단위보다 길 수 있으며, `conform`이 필요한 프레임만 쓴다.
-- 거부: `cast check`나 `models check`를 통과하지 못한다. 영상 모델이 아니다. `edit`인데 모델이 참조 영상을 받지 않는다. 숏 하나가 상한보다 길다. 단위에 필요한 이미지가 모델의 `image_refs`보다 많다. 계획이 있는데 `--replace`가 없다. 내보냈지만 끝나지 않은 작업이 있다(`jobs done`이나 `jobs fail`로 먼저 닫는다).
+- 거부: `cast check`나 `models check`를 통과하지 못한다. 영상 모델이 아니다. `edit`인데 모델이 참조 영상을 받지 않는다. 숏 하나가 상한보다 길다. 단위에 필요한 이미지가 모델의 `image_refs`보다 많다. `--per-shot`과 `--max-unit-seconds`를 함께 줬다. 계획이 있는데 `--replace`가 없다. 내보냈지만 끝나지 않은 작업이 있다(`jobs done`이나 `jobs fail`로 먼저 닫는다).
 
 ### plan check
 
@@ -254,13 +264,13 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 출력: `plan ok`. 문제가 있으면 문제마다 한 줄씩 내고 종료 코드 2.
 - 검사하는 것: 단위의 프롬프트가 비어 있지 않은 영어인지, 입력 파일이 있는지, 길이와 화면비와 해상도가 모델 범위 안인지, 견적 뒤에 `params`나 입력이 바뀌지 않았는지.
-- 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지. 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
+- 형식: 단위 id가 `u`와 숫자(`u01`), 작업 id가 `j`와 숫자(`j0001`)인지, 단위의 `method`가 `edit`나 `regen`인지, `shots`가 비어 있지 않은 숏 번호 목록인지, `qc_skip`이 `camera`, `motion`, `color`, `flicker_ratio` 가운데 이름을 담은 목록인지, `pad_frames`가 있으면 0 이상의 정수인지(이 키가 없는 이전 계획은 통과한다). 단위 id는 폴더 이름이 되므로, 형식이 틀린 단위는 `conform`, `qc`, `assemble`, `report`도 거부한다.
 - 입력: 단위의 `inputs`가 지금의 교체표와 방법으로 정해지는 입력(맨 앞에 `edit`는 단위의 참조 클립, `regen`은 첫 숏의 첫 스틸, 이어서 단위의 숏에 나오는 요소의 교체 이미지가 요소 목록 순서로)과 하나도 다르지 않은지. 빠지거나 더해지거나 순서나 경로나 역할이나 요소가 다르면 `plan build --replace`로 계획을 다시 만들라는 문제가 나온다. 교체표가 `cast check`를 통과하지 못하면 입력을 비교할 수 없으므로 그것도 문제로 나온다.
 - 모델: 이미지 입력 수가 지금 `models.json`의 `image_refs` 이하인지, `edit`이면 모델의 `video_ref`가 `true`인지.
 
 ### plan show
 
-`plan.json`을 그대로 보여 준다. 단위의 `shots`, `start`, `end`, `method`, `model`, `params`, `prompt`, `inputs`, `qc_skip`, `selected_take`와 작업 목록이 있다.
+`plan.json`을 그대로 보여 준다. 단위의 `shots`, `start`, `end`, `method`, `model`, `params`, `prompt`, `inputs`, `qc_skip`, `selected_take`, `pad_frames`와 작업 목록이 있다.
 
 ```powershell
 & $cr plan show $p
@@ -364,21 +374,46 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 - 출력: JSON. `ok`, `problems`, `batches`(묶음마다 `limit`, `committed`, `remaining`), `totals`(모든 묶음의 `limit`, `committed`, `remaining` 합계), `provider_ids`(끝난 작업의 Higgsfield 작업 id).
 - `ok`가 `false`면 종료 코드 2. `problems`에 `ledger line 16 is invalid: ...`처럼 문제 줄이 적힌다. UTF-8로 읽을 수 없는 줄도 문제 줄 하나로 적히고 나머지 줄은 그대로 읽힌다.
 
+### takes cuts
+
+테이크에서 숏의 경계를 정할 때 볼 값을 낸다. 테이크를 `conform`과 똑같이 원본의 프레임 속도와 화면으로 바꾼 뒤 읽는다.
+
+```powershell
+& $cr takes cuts $p --unit u01 --take t001
+```
+
+- 출력: JSON. `frames`(프레임 속도를 바꾼 뒤의 테이크 프레임 수), `unit_frames`(단위의 프레임 수), `pad_frames`(계획에 적힌 붙인 프레임 수. 키가 없으면 0), `cuts`(분석과 같은 컷 검출로 테이크에서 찾은 컷 프레임), `tail_static_from`(끝까지 이어지는 거의 같은 프레임들의 첫 프레임. 없으면 `null`).
+
+  ```json
+  {"frames": 97, "unit_frames": 30, "pad_frames": 66, "cuts": [], "tail_static_from": 33}
+  ```
+- 프레임 번호는 `conform`의 `--start-frame`, `--take-cuts`와 같이 프레임 속도를 바꾼 뒤의 테이크 프레임이다. 이 번호로 프레임을 펼쳐 보는 명령은 아래 "테이크의 프레임 구간"에 있다.
+- `tail_static_from`: 마지막 프레임에서 거꾸로 가며, 다음 프레임과의 차이가 1.5 미만인 동안 같은 구간으로 본다. 차이는 컷 검출이 쓰는 64x36 회색 축소 화면의 평균 절대 차(0-255)다. 그 구간이 6프레임 이상일 때만 나온다. 패딩한 단위에서 모델이 돌려준 멈춘 끝을 찾는 데 쓴다. 움직임이 아주 느린 숏도 이 기준 아래로 내려가 멈춘 구간으로 잡힐 수 있으니 프레임을 보고 확인한다.
+- 숏 하나인 단위의 테이크에 `cuts`가 있으면 모델이 원본에 없는 컷을 넣었거나 잘못된 컷을 남긴 것이고, 그 테이크는 쓸 수 없다.
+- 테이크 폴더에는 아무것도 쓰지 않는다. 바꾼 테이크는 임시 폴더에 두었다가 지운다.
+- 거부: 그런 테이크가 없다. 현재 계획에 없는 단위다.
+
 ### conform
 
 테이크를 원본에 맞춘다. 프레임 속도를 원본으로 바꾸고, 화면 영역을 채우도록 크기를 맞춰 넘치는 부분을 잘라 내고, 원본과 같은 검은 띠를 붙인 뒤, 숏마다 원본과 같은 프레임 수로 자른다.
 
 ```powershell
+& $cr conform $p --unit u01 --take t001 --take-cuts "0,33"
+& $cr conform $p --unit u03 --take t001 --take-cuts "0,88,129"
 & $cr conform $p --unit u01 --take t001
 & $cr conform $p --unit u01 --take t001 --start-frame 3
 & $cr conform $p --unit u01 --take t001 --allow-retime
 ```
 
-- 쓰는 것: `takes/<단위>/<테이크>/shots/NNNN.mov`(ProRes), `conform.json`(`start_frame`, `retimed`, `source_frames`, `unit_frames`). 다시 실행하면 새로 만든다. `raw` 파일은 읽기만 한다.
+- 쓰는 것: `takes/<단위>/<테이크>/shots/NNNN.mov`(ProRes), `conform.json`(`start_frame`, `retimed`, `source_frames`, `unit_frames`, 그리고 `--take-cuts`를 썼으면 `take_cuts`와 `segments`). 다시 실행하면 새로 만든다. `raw` 파일은 읽기만 한다.
 - 출력: 숏 클립의 경로를 한 줄에 하나씩.
-- `--start-frame`: 프레임 속도를 바꾼 뒤의 테이크에서 단위의 첫 프레임이 될 프레임 번호. 기본 0.
-- `--allow-retime`: 테이크가 단위보다 짧을 때 고르게 늘려 프레임 수를 맞춘다. 동작 속도가 달라진다.
-- 거부: 테이크가 짧다(`take too short: have 20 frames, need 30`). 그런 테이크가 없다. 현재 계획에 없는 단위다.
+- `--take-cuts`: 단위의 숏마다 테이크에서 그 숏이 시작하는 프레임을 차례로, 끝에 마지막 숏이 끝난 다음 프레임을 적는다. 숏 수보다 하나 많은 정수를 쉼표로 잇고 따옴표로 감싼다. 번호는 `--start-frame`처럼 프레임 속도를 바꾼 뒤의 테이크 프레임이다(`takes cuts`의 번호와 같다). 구간 `[b_i, b_i+1)`이 i번째 숏의 클립이 되고, 구간의 프레임 수가 원본 숏과 다르면 `--allow-retime`과 같은 방식(구간 안에서 고르게, 처음과 끝 프레임을 모두 쓰는 표본)으로 늘리거나 줄여 맞추며, 같으면 프레임 하나하나 그대로 옮긴다. 테이크가 단위와 맞지 않을 때(프레임 수가 다르거나 컷이 어긋났을 때) 쓴다. 패딩한 단위의 끝 경계는 `tail_static_from`, 또는 프레임을 보고 정한, 화면이 멈추기 직전의 마지막 프레임이다.
+- `--take-cuts`를 쓰면 `conform.json`의 `start_frame`은 첫 값, `take_cuts`는 준 값, `segments`는 숏마다 `{"shot": 2, "take_start": 88, "take_end": 129, "frames": 42, "retimed": true}`(숏 번호, 테이크 구간, 원본 숏의 프레임 수, 늘리거나 줄였는지)이고, `retimed`는 구간 하나라도 늘리거나 줄였으면 `true`다.
+- `--start-frame`: 프레임 속도를 바꾼 뒤의 테이크에서 단위의 첫 프레임이 될 프레임 번호. 기본 0. `--take-cuts` 없이 쓴다.
+- `--allow-retime`: 테이크가 단위보다 짧을 때 고르게 늘려 프레임 수를 맞춘다. 동작 속도가 달라진다. `--take-cuts` 없이 쓴다.
+- `--take-cuts` 없이 실행하면 테이크가 `--start-frame`부터 단위와 프레임 하나하나 맞는다고 보고 자른다.
+- 패딩한 단위의 붙인 프레임은 숏 클립에 들어가지 않는다. 숏 클립은 언제나 원본 숏의 프레임 수다.
+- 거부: 테이크가 짧다(`take too short: have 20 frames, need 30`, `--take-cuts`를 쓰지 않을 때). 그런 테이크가 없다. 현재 계획에 없는 단위다. `--take-cuts`의 값 수가 숏 수보다 하나 많지 않다. 값이 0 이상에서 시작해 엄격히 오름차순인 정수가 아니다. 마지막 값이 테이크의 프레임 수보다 크다. 어떤 구간의 프레임 수가 원본 숏과 25퍼센트 넘게 다르다(숏 번호와 두 프레임 수가 나온다. 경계를 잘못 정했거나, 모델이 숏을 바꾸거나 빼먹어 테이크를 다시 생성해야 한다). `--take-cuts`를 `--start-frame`(0이 아닌 값)이나 `--allow-retime`과 함께 썼다.
 
 ### qc
 
@@ -487,7 +522,7 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 | `units[].qc_skip` | 교체 때문에 당연히 달라지는 점수를 판정에서 뺄 때. `"camera"`, `"motion"`, `"color"`, `"flicker_ratio"` 가운데 적고, 단위의 모든 숏에 적용된다. 배경을 교체한 숏의 `color`는 도구가 자동으로 빼므로 적지 않아도 된다. 그 밖에 이유를 댈 수 있는 경우에 쓰고, 넣기 전에 사용자에게 알린다 |
 | `units[].params.duration` | 모델이 정해진 길이만 받을 때. 단위 길이보다 짧지 않은 허용 값으로 고친다. 견적 전에 고치고, 견적 뒤에 고쳤으면 다시 견적을 기록한다 |
 
-작업 목록, `state`, `est_credits`, `inputs`, `selected_take`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
+작업 목록, `state`, `est_credits`, `inputs`, `selected_take`, `pad_frames`는 손으로 고치지 않는다. 입력을 바꾸려면 `casting.json`을 고치고 `plan build --replace`를 한다. `inputs`가 지금의 교체표와 다르면 `plan check`와 `jobs next`가 거부한다.
 
 ### 점수 읽기
 
@@ -520,6 +555,12 @@ New-Item -ItemType Directory -Force "$p\review" | Out-Null
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\raw.mp4" -vf "select='not(mod(n\,12))',scale=320:-2,tile=8x2" -frames:v 1 -update 1 "$p\review\u01_t001_raw.png"
 ```
 
+**테이크의 프레임 구간.** `takes cuts`가 보고한 번호 둘레를 펼쳐 숏의 경계를 정할 때 쓴다. 앞의 `fps=24000/1001`은 원본의 프레임 속도(`analysis/video.json`의 `fps_num`/`fps_den`)로 바꾼다. 먼저 이것으로 바꿔야 칸의 프레임 번호가 `takes cuts`와 `--take-cuts`의 번호와 같다. 프레임 84부터 95까지 열두 장이 왼쪽 위부터 차례로 놓인다. 컷 둘레면 장면이 바뀌는 칸의 번호가 다음 숏이 시작하는 경계다. 패딩한 단위의 테이크는 끝에 멈춘 화면이 이어지므로 `tail_static_from` 둘레를 펼쳐, 화면이 멈추기 직전의 마지막 프레임을 찾는다. 그것이 끝 경계다.
+
+```powershell
+ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u03\t001\raw.mp4" -vf "fps=24000/1001,select='between(n\,84\,95)',scale=320:-2,tile=6x2" -frames:v 1 -update 1 "$p\review\u03_t001_0084-0095.png"
+```
+
 **맞춘 숏 클립.** 첫 프레임, 끝 프레임, 그 사이를 고르게 뽑는다. `5`는 간격으로 숏의 프레임 수를 8로 나눠 올림한 값이고, `35`는 끝 프레임 번호로 프레임 수에서 1을 뺀 값이다. 숏의 프레임 수는 `casting.template.json`의 `start`와 `end`의 차다. 원본의 `analysis/review/shot_NNNN.png`, 스틸 `first.png`와 `last.png`와 나란히 놓고 본다.
 
 ```powershell
@@ -546,19 +587,23 @@ ffmpeg -hide_banner -loglevel error -y -i "$p\reference\source.mp4" -vf "select=
 
 ## 후보 모델 비교
 
-어떤 모델과 방법이 이 영상에 맞는지 모를 때, 숏 한두 개를 후보마다 만들어 비교한다. 한 프로젝트 안에서 후보를 차례로 바꿔 가며 한다.
+어떤 모델과 방법이 이 영상에 맞는지 모를 때, 숏 한두 개를 후보마다 만들어 비교한다. 이 프로젝트에서 처음 다루는 종류의 영상이면 나머지를 계획하기 전에 먼저 한다. 시험할 숏은 교체할 인물이 화면에서 가장 크게 나오는 한두 개로 고른다. 얼굴과 모습이 지켜졌는지가 가장 잘 드러나는 숏이다. 한 프로젝트 안에서 후보를 차례로 바꿔 가며 한다.
 
 1. `models.json`에 후보 모델을 모두 적는다.
-2. 첫 후보로 계획을 만든다. 숏을 따로따로 시험하려면 `--max-unit-seconds`로 단위를 짧게 한다.
+2. 첫 후보로 `--per-shot` 계획을 만든다. 숏마다 단위가 하나씩 생기므로 시험할 숏의 단위만 고를 수 있다.
+
+   ```powershell
+   & $cr plan build $p --model seedance_2_5 --method edit --batch cmp-edit --per-shot
+   ```
 3. 시험할 단위에만 프롬프트를 쓰고, 그 단위의 작업에만 `jobs set-cost`를 한다. 견적이 없는 작업은 나가지 않으므로 나머지 단위에는 비용이 들지 않는다. `jobs next`는 내보낼 작업의 단위만 검사하므로 나머지 단위의 프롬프트는 비워 둬도 된다(`plan check`는 그 단위들을 문제로 보여 준다).
-4. 비용 표를 보여 주고 승인받은 뒤 `jobs next`, 생성, `jobs done`, `conform`, `qc`, 스틸 검수까지 마친다. 점수는 `takes/<단위>/<테이크>/scores.json`에 남는다.
+4. 비용 표를 보여 주고 승인받은 뒤 `jobs next`, 생성, `jobs done`, `takes cuts`, `conform`, `qc`, 스틸 검수까지 마친다. 점수는 `takes/<단위>/<테이크>/scores.json`에 남는다.
 5. 다음 후보로 계획을 바꾼다. 묶음 이름은 후보마다 다르게 한다.
 
    ```powershell
-   & $cr plan build $p --model seedance_2_5 --method regen --batch cmp-regen --replace
+   & $cr plan build $p --model seedance_2_5 --method regen --batch cmp-regen --per-shot --replace
    ```
 
-   이전 계획은 `plans/plan-0001.json`으로 보관되고, 새 단위와 작업은 이어지는 번호(`u02`, `j0002`)를 받는다. 이전 단위의 테이크와 점수 파일은 `takes/`에 그대로 남는다. 다만 이전 단위는 현재 계획에 없으므로 `conform`과 `qc`를 더 할 수 없다. 계획을 바꾸기 전에 끝낸다.
+   이전 계획은 `plans/plan-0001.json`으로 보관되고, 새 단위와 작업은 이어지는 번호(숏이 셋이면 `u04`, `j0004`부터)를 받는다. 이전 단위의 테이크와 점수 파일은 `takes/`에 그대로 남는다. 다만 이전 단위는 현재 계획에 없으므로 `takes cuts`, `conform`, `qc`를 더 할 수 없다. 계획을 바꾸기 전에 끝낸다.
 6. 내보냈지만 끝나지 않은 작업이 있으면 `--replace`가 거부된다. `jobs done`이나 `jobs fail`로 닫고 다시 한다.
-7. 후보, 숏, 점수, 눈으로 본 평가, 쓴 크레딧을 표로 사용자에게 보여 주고 기본 방법과 모델을 정한다. 어느 단위가 어느 모델이었는지는 보관된 계획 파일의 `units[].model`과 `units[].method`에 있다.
-8. 정한 방법과 모델로 `plan build --replace`를 해서 전체 계획을 만들고 SKILL.md의 4단계부터 이어 간다.
+7. 후보마다 네 가지를 비교한다. 교체 이미지와 같은 사람(크리처면 같은 크리처)으로 보이는가, 모든 숏에서 같은 디자인인가, 숏과 카메라가 원본 그대로인가(숏이 다른 화면으로 바뀌거나 빠지거나 늘어나지 않았는가), 타이밍이 맞는가. 후보, 숏, 점수, 눈으로 본 평가, 쓴 크레딧을 표로 사용자에게 보여 주고 기본 방법과 모델을 정한다. 어느 단위가 어느 모델이었는지는 보관된 계획 파일의 `units[].model`과 `units[].method`에 있다.
+8. 정한 방법과 모델로 `plan build --replace`(`edit`면 `--per-shot`과 함께)를 해서 전체 계획을 만들고 SKILL.md의 4단계부터 이어 간다. 숏 여럿을 한 단위로 묶으려면, 고른 모델이 단위 안의 숏을 따로 지키는지를 숏 여럿인 단위 하나로 먼저 시험한다.
