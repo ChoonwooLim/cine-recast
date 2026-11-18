@@ -91,10 +91,12 @@ def _cmd_models_check(args: argparse.Namespace) -> int:
 
 def _cmd_plan_build(args: argparse.Namespace) -> int:
     data = plan.build(Path(args.project), model=args.model, method=args.method, batch=args.batch,
-                      quality=args.quality, max_unit_seconds=args.max_unit_seconds, replace=args.replace)
+                      quality=args.quality, max_unit_seconds=args.max_unit_seconds, replace=args.replace,
+                      per_shot=args.per_shot)
     for unit in data["units"]:
+        padded = f"  padded +{unit['pad_frames']} frames" if unit.get("pad_frames") else ""
         print(f"{unit['id']}: shots {unit['shots']}  frames {unit['start']}-{unit['end']}  "
-              f"duration {unit['params']['duration']} s")
+              f"duration {unit['params']['duration']} s{padded}")
     print(f"planned jobs: {', '.join(job['id'] for job in data['jobs'])} (batch {args.batch})")
     return 0
 
@@ -307,6 +309,8 @@ def _build_parser() -> argparse.ArgumentParser:
     plan_build.add_argument("--quality", choices=plan.QUALITIES, default="draft")
     plan_build.add_argument("--max-unit-seconds", type=float, default=None,
                             help="unit length cap below the model's max_seconds")
+    plan_build.add_argument("--per-shot", action="store_true",
+                            help="make every shot a unit of its own (not with --max-unit-seconds)")
     plan_build.add_argument("--replace", action="store_true",
                             help="rebuild an existing plan: archive it under plans/ and give the new units and "
                                  "jobs ids never used before (refused while a job is issued and not finished)")

@@ -249,17 +249,22 @@ def extract_still(path: Path, frame: int, out: Path, *, crop: Crop | None = None
 
 
 def cut_frames(path: Path, start: int, end: int, out: Path, *, crop: Crop | None = None,
-               codec: str = "h264", audio: bool = False) -> None:
-    """Re-encode frames [start, end) of a clip. codec is "h264" or "prores"."""
+               codec: str = "h264", audio: bool = False, hold: int = 0) -> None:
+    """Re-encode frames [start, end) of a clip, followed by `hold` copies of its last frame.
+    codec is "h264" or "prores"; a held clip has no audio."""
     if end <= start:
         raise CineRecastError(f"empty frame range [{start}, {end})")
     if codec not in ("h264", "prores"):
         raise CineRecastError(f"unknown codec: {codec}")
+    if isinstance(hold, bool) or not isinstance(hold, int) or hold < 0 or (hold and audio):
+        raise CineRecastError(f"hold must be a whole number of at least 0, for a clip without audio: {hold!r}")
     path, out = Path(path), Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     filters = [_trim_filter(start, end)]
     if crop is not None:
         filters.append(_crop_filter(crop))
+    if hold:
+        filters.append(f"tpad=stop_mode=clone:stop={hold}")
     args = ["-i", str(path), "-vf", ",".join(filters), "-fps_mode", "passthrough"]
     if codec == "h264":
         args += ["-c:v", "libx264", "-crf", "14", "-preset", "veryfast", "-pix_fmt", "yuv420p"]

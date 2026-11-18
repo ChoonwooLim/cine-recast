@@ -1,6 +1,8 @@
 """Generation units, jobs, and the hand-over of jobs to the agent.
 
-A unit is a run of consecutive shots generated in one call. Every unit has jobs; a job moves
+A unit is a run of consecutive shots generated in one call (with per_shot, every shot is a unit of
+its own). An edit unit whose frames last less than the model's min_seconds gets a reference clip
+padded with copies of its last frame, recorded as the unit's pad_frames. Every unit has jobs; a job moves
 planned -> quoted (set_cost) -> issued (issue_next) -> done or failed (record_done, record_fail).
 A job reaches the agent only through issue_next, which hands it to ledger.issue first and stops
 at the first refusal.
@@ -191,6 +193,25 @@ def _unit_problems(item: dict, label: str) -> list[str]:
     return problems
 
 
+def _pad_problem(item: dict, label: str) -> str | None:
+    """A unit's pad_frames: absent (a plan built before the key existed) or a whole number of at least 0."""
+    if "pad_frames" not in item:
+        return None
+    value = item["pad_frames"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return f"{label}: pad_frames must be a whole number of at least 0, not {value!r}."
+    return None
+
+
+def pad_frames(item: dict) -> int:
+    """The copies of its last frame that the unit's reference clip ends with; 0 when the key is absent.
+    A value that is not a whole number of at least 0 is refused with CineRecastError."""
+    problem = _pad_problem(item, f"unit {item.get('id')}")
+    if problem:
+        raise CineRecastError("plan.json: " + problem.rstrip(".") + "; repair it, plan check lists the problems")
+    return item.get("pad_frames", 0)
+
+
 def _find_unit(data: dict, unit_id: str) -> dict:
     """The unit with this id. An id that is not 'u' followed by digits is refused: unit ids name
     folders under analysis/units/ and takes/."""
@@ -317,9 +338,14 @@ def _unit_inputs(root: Path, unit_id: str, method: str, shots: list[int]) -> lis
 
 
 def build(root: Path, *, model: str, method: str, batch: str, quality: str = "draft",
-          max_unit_seconds: float | None = None, replace: bool = False) -> dict:
+          max_unit_seconds: float | None = None, replace: bool = False, per_shot: bool = False) -> dict:
     """Pack the shots into units, write each unit's reference clip and plan.json with one
     planned job per unit. Returns the plan. Nothing is written when a check refuses.
+
+    With per_shot, every shot becomes its own unit (not combined with max_unit_seconds). An edit
+    unit whose frames last less than the model's min_seconds gets a reference clip of
+    ceil(min_seconds * fps) frames: its frames, then copies of its last frame; the unit records the
+    copies as pad_frames (0 for every other unit).
 
     With replace, the current plan is archived under plans/ and new unit and job ids follow every
     id used before; refused while a job of the current plan is issued and not finished.
@@ -335,6 +361,9 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         raise CineRecastError("batch must not be empty")
     if max_unit_seconds is not None and (not is_number(max_unit_seconds) or max_unit_seconds <= 0):
         raise CineRecastError(f"max_unit_seconds must be a number greater than 0: {max_unit_seconds!r}")
+    if per_shot and max_unit_seconds is not None:
+        raise CineRecastError("per_shot (--per-shot) cannot be combined with max_unit_seconds (--max-unit-seconds): "
+                              "one shot per unit already sets the unit length; leave one of them out")
     current = None
     if pp.plan_file.exists():
         if not replace:
@@ -373,13 +402,16 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
         if seconds > limit:
             raise CineRecastError(f"shot {shot.index} is {float(seconds):.3f} s long, longer than the "
                                   f"unit limit of {float(limit):g} s ({source})")
-        if groups and (groups[-1][-1].end - groups[-1][0].start + shot.frames) * frame_seconds <= limit:
+        fits = bool(groups) and (groups[-1][-1].end - groups[-1][0].start + shot.frames) * frame_seconds <= limit
+        if fits and not per_shot:
             groups[-1].append(shot)
         else:
             groups.append([shot])
 
     resolution = _resolution(spec, quality)  # the unit's default; each job's quality decides what is sent
     aspect_ratio = closest_aspect(spec, box.aspect)
+    # An edit unit's reference clip is the model's source video, which must last min_seconds.
+    min_frames = math.ceil(_exact(spec["min_seconds"]) / frame_seconds) if method == "edit" else 0
     first_unit = _next_unit_number(root, current)
     units: list[dict] = []
     for number, group in enumerate(groups, start=first_unit):
@@ -397,13 +429,15 @@ def build(root: Path, *, model: str, method: str, batch: str, quality: str = "dr
             "params": {"duration": _whole(max(spec["min_seconds"], math.ceil((end - start) * frame_seconds))),
                        "aspect_ratio": aspect_ratio, "resolution": resolution},
             "prompt": "", "inputs": inputs, "qc_skip": [], "selected_take": None,
+            "pad_frames": max(0, min_frames - (end - start)),
         })
     first_job = _next_job_number(root, current)
     jobs = [_new_job(f"j{n:04d}", item["id"], batch, quality) for n, item in enumerate(units, start=first_job)]
 
     reference = root / project["reference"]
     for item in units:          # new unit ids, so earlier reference clips are never touched
-        cut_frames(reference, item["start"], item["end"], pp.unit_dir(item["id"]) / "ref.mp4", crop=box.as_crop())
+        cut_frames(reference, item["start"], item["end"], pp.unit_dir(item["id"]) / "ref.mp4", crop=box.as_crop(),
+                   hold=item["pad_frames"])
     if current is not None:
         _archive(root, current)
     data = {"units": units, "jobs": jobs}
@@ -458,7 +492,8 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
     """Problems that keep the plan's jobs from being issued. An empty list means it is ready.
 
     Unit ids are 'u' followed by digits and job ids 'j' followed by digits; a unit's shots are a
-    non-empty list of shot numbers and its qc_skip a list of score names. Each unit's stored inputs
+    non-empty list of shot numbers, its qc_skip a list of score names and its pad_frames, when
+    present, a whole number of at least 0. Each unit's stored inputs
     must be the inputs _unit_inputs derives from the swap table and the method now, and fit the
     model's image_refs and video_ref as models.json gives them now.
 
@@ -486,6 +521,9 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
         label = f"unit {item.get('id')}" if is_text(item.get("id")) else f"units[{position}]"
         shape = _unit_problems(item, label)
         problems += shape
+        pad = _pad_problem(item, label)
+        if pad:
+            problems.append(pad)
         prompt = item.get("prompt")
         if not isinstance(prompt, str) or not is_english_prompt(prompt):
             problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")

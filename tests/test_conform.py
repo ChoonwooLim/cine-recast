@@ -56,8 +56,8 @@ def test_retimed_record_and_take_left_untouched(planned3, tmp_path):
     folder = planned3.take_dir("u01", t)
     before = {p.name: p.read_bytes() for p in folder.iterdir()}
     conform(planned3.root, "u01", t, start_frame=5, allow_retime=True)
-    assert read_json(folder / "conform.json") == {
-        "start_frame": 5, "retimed": True, "source_frames": 70, "unit_frames": 90}
+    assert read_json(folder / "conform.json") == {                     # the unit clip is padded to 4 s, 96 frames
+        "start_frame": 5, "retimed": True, "source_frames": 76, "unit_frames": 90}
     assert sorted(p.name for p in folder.iterdir()) == ["conform.json", "meta.json", "raw.mp4", "shots"]
     assert {name: (folder / name).read_bytes() for name in before} == before
 

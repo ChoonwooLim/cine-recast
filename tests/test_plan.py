@@ -870,3 +870,114 @@ def test_issue_loop_refuses_a_stale_quote_on_its_own(planned3, monkeypatch):
     with pytest.raises(CineRecastError, match="set-cost") as refused:
         issue_next(root, "b")
     assert refused.value.issued == [] and batch_status(root, "b")["committed"] == 0.0
+
+
+# --- task 19: one shot per unit, padding a short unit clip to the model's minimum length ---
+
+def _gray_frames(path):
+    import numpy as np
+
+    from cine_recast.ffmpeg import iter_frames
+    return [frame.astype(np.int16) for frame in iter_frames(path, size=(64, 36), gray=True)]
+
+
+def _mad(a, b):
+    import numpy as np
+    return float(np.abs(a - b).mean())
+
+
+def test_per_shot_makes_one_unit_per_shot(cast3):
+    write_models(cast3.root, min_seconds=1)                            # every shot is long enough: no padding
+    p = build(cast3.root, model="seedance_2_5", method="edit", batch="b", per_shot=True)
+    assert [(u["id"], u["shots"], u["start"], u["end"]) for u in p["units"]] == [
+        ("u01", [1], 0, 30), ("u02", [2], 30, 54), ("u03", [3], 54, 90)]
+    assert [probe(cast3.unit_dir(u["id"]) / "ref.mp4").frames for u in p["units"]] == [30, 24, 36]
+    assert [(j["id"], j["unit"]) for j in p["jobs"]] == [("j0001", "u01"), ("j0002", "u02"), ("j0003", "u03")]
+    assert [u["pad_frames"] for u in p["units"]] == [0, 0, 0]
+    assert [u["params"]["duration"] for u in p["units"]] == [2, 1, 2]
+
+
+def test_per_shot_is_refused_with_max_unit_seconds(cast3):
+    write_models(cast3.root, min_seconds=1)
+    with pytest.raises(CineRecastError, match="per.shot.*max.unit.seconds|max.unit.seconds.*per.shot"):
+        build(cast3.root, model="seedance_2_5", method="edit", batch="b", per_shot=True, max_unit_seconds=2.0)
+    assert not cast3.plan_file.exists() and not (cast3.root / "analysis" / "units").exists()
+
+
+def test_per_shot_still_refuses_a_shot_longer_than_the_model_allows(cast3):
+    write_models(cast3.root, min_seconds=1, max_seconds=1.0)          # shot 1 is 1.25 s
+    with pytest.raises(CineRecastError, match="shot 1 .*longer"):
+        build(cast3.root, model="seedance_2_5", method="edit", batch="b", per_shot=True)
+
+
+def test_per_shot_replan_archives_and_continues_the_ids(planned3):
+    root = planned3.root
+    p = build(root, model="seedance_2_5", method="edit", batch="b2", per_shot=True, replace=True)
+    assert [u["id"] for u in p["units"]] == ["u02", "u03", "u04"] and [j["id"] for j in p["jobs"]] == [
+        "j0002", "j0003", "j0004"]
+    assert (root / "plans" / "plan-0001.json").is_file()
+
+
+def test_short_edit_unit_clip_is_padded_with_its_last_frame(cast3):
+    write_models(cast3.root)                                           # min_seconds 4: 96 frames at 24 fps
+    p = build(cast3.root, model="seedance_2_5", method="edit", batch="b", per_shot=True)
+    assert [u["pad_frames"] for u in p["units"]] == [66, 72, 60]
+    assert [u["params"]["duration"] for u in p["units"]] == [4, 4, 4]
+    clip = cast3.unit_dir("u01") / "ref.mp4"
+    frames = _gray_frames(clip)
+    assert len(frames) == probe(clip).frames == 96
+    shot = _gray_frames(cast3.shot_dir(1) / "ref.mp4")                 # the reference shot, 30 frames
+    assert _mad(frames[0], shot[0]) < 2 and _mad(frames[29], shot[29]) < 2
+    assert _mad(frames[28], frames[29]) > 1.5                         # shot 1 moves up to its last frame
+    assert max(_mad(frame, frames[29]) for frame in frames[30:]) < 1.0   # then holds it
+    nxt = _gray_frames(cast3.shot_dir(2) / "ref.mp4")[0]
+    assert min(_mad(frame, nxt) for frame in frames) > 20             # no frame of the next shot
+
+
+def test_long_enough_and_regen_units_are_not_padded(cast3):
+    write_models(cast3.root, min_seconds=1)
+    long_enough = build(cast3.root, model="seedance_2_5", method="edit", batch="b")["units"]
+    assert [(u["shots"], u["pad_frames"]) for u in long_enough] == [([1, 2, 3], 0)]
+    assert probe(cast3.unit_dir("u01") / "ref.mp4").frames == 90
+    write_models(cast3.root)                                           # min_seconds 4 is longer than every shot
+    regen = build(cast3.root, model="seedance_2_5", method="regen", batch="b", per_shot=True, replace=True)["units"]
+    assert [u["pad_frames"] for u in regen] == [0, 0, 0]
+    assert [probe(cast3.unit_dir(u["id"]) / "ref.mp4").frames for u in regen] == [30, 24, 36]
+
+
+def test_a_unit_of_several_shots_is_padded_too(cast3):
+    write_models(cast3.root, min_seconds=4)                            # the three shots last 3.75 s
+    [unit] = build(cast3.root, model="seedance_2_5", method="edit", batch="b")["units"]
+    assert unit["pad_frames"] == 6 and probe(cast3.unit_dir("u01") / "ref.mp4").frames == 96
+
+
+@pytest.mark.parametrize("value", [-1, 2.5, "3", True, None, [1]])
+def test_check_refuses_a_bad_pad_frames(planned3, value):
+    assert check(planned3.root) == []
+    _edit_unit(planned3, lambda u: u.update(pad_frames=value))
+    assert any("u01" in p and "pad_frames" in p for p in check(planned3.root))
+
+
+def test_check_accepts_a_plan_without_pad_frames(planned3):
+    _edit_unit(planned3, lambda u: u.pop("pad_frames"))                # a plan built before the key existed
+    assert check(planned3.root) == []
+
+
+def test_cli_plan_build_per_shot(cast3, capsys):
+    root = str(cast3.root)
+    write_models(cast3.root)
+    args = ["plan", "build", root, "--model", "seedance_2_5", "--method", "edit", "--batch", "draft-1"]
+    capsys.readouterr()
+    assert main([*args, "--per-shot", "--max-unit-seconds", "2"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "--per-shot" in err and "--max-unit-seconds" in err
+    assert main([*args, "--per-shot"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "u01: shots [1]  frames 0-30  duration 4 s  padded +66 frames",
+        "u02: shots [2]  frames 30-54  duration 4 s  padded +72 frames",
+        "u03: shots [3]  frames 54-90  duration 4 s  padded +60 frames",
+        "planned jobs: j0001, j0002, j0003 (batch draft-1)",
+    ]
+    write_models(cast3.root, min_seconds=1)
+    assert main([*args, "--replace"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "u04: shots [1, 2, 3]  frames 0-90  duration 4 s"
