@@ -59,14 +59,23 @@ def _answer(rights: dict, item: str) -> str | None:
 
 def _virtual_person_problem(root: Path, images: list[tuple[str, object]]) -> str | None:
     """Why likeness_consent "not_applicable" does not hold for these (element, image) pairs of person
-    swaps, or None when every image is a generated file of its element made without reference images."""
+    swaps, or None when every image is a generated file of its element made without reference images.
+
+    When assets.json or the ledger cannot be read, the cause is returned as the problem instead of raised.
+    """
     from cine_recast.assets import generated_files, ref_free_files  # assets imports this module
 
     known: dict[str, tuple[set[Path], set[Path]]] = {}
     for element, image in images:
         if element not in known:
-            known[element] = ({(root / name).resolve() for name in generated_files(root, element)},
-                              {(root / name).resolve() for name in ref_free_files(root, element)})
+            try:
+                known[element] = ({(root / name).resolve() for name in generated_files(root, element)},
+                                  {(root / name).resolve() for name in ref_free_files(root, element)})
+            except (CineRecastError, OSError) as exc:
+                cause = exc.message if isinstance(exc, CineRecastError) else str(exc)
+                return (f"A person is replaced and likeness_consent is 'not_applicable', but the generated files "
+                        f"cannot be checked: {cause}; repair it, or record consent with: "
+                        "rights set --item likeness_consent --answer yes")
         generated, ref_free = known[element]
         path = (root / image).resolve() if isinstance(image, str) else None
         if path in ref_free:

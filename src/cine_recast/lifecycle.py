@@ -8,6 +8,11 @@ An entry moves planned -> quoted -> issued -> done or failed.
   entry whose payload changed since it was quoted must be quoted again.
 - An entry reaches the agent only through issue_in_order, which hands it to ledger.issue first and
   stops at the first refusal; the payloads issued before it travel on IssueRefused.
+- Only an issued entry is recorded: finish records done in the ledger after the caller stored the
+  returned files and undoes that storing when the ledger refuses; fail records the failure in the
+  ledger first.
+
+`noun` ("job", "asset") names the entry in every message.
 """
 
 import hashlib
@@ -86,6 +91,22 @@ def stale_quote(entry: dict, payload: dict, *, noun: str, command: str) -> str |
             f"quote it again with {command}")
 
 
+def quote(entry: dict, credits: float, payload_of: Callable[[], dict], *, noun: str) -> dict:
+    """Record the quoted cost of a planned or quoted entry and bind it to the payload payload_of()
+    returns (called only after the state and the credits are accepted). The entry becomes quoted;
+    a new quote replaces the estimate and the binding at any time before it is issued. The caller saves.
+    """
+    if entry.get("state") not in UNISSUED:
+        raise CineRecastError(f"{noun} {entry.get('id')} is {entry.get('state')}; its quote can no longer change")
+    if not is_number(credits) or credits <= 0:
+        raise CineRecastError(f"{noun} {entry.get('id')}: credits must be a finite number greater than 0: {credits!r}")
+    payload = payload_of()
+    entry["est_credits"] = float(credits)
+    entry["quote_digest"] = digest(payload)
+    entry["state"] = "quoted"
+    return entry
+
+
 def issue_in_order(root: Path, batch: str, queue: list[dict], payload_of: Callable[[dict], dict],
                    save: Callable[[], None], *, noun: str, command: str) -> list[dict]:
     """Hand each queued entry to ledger.issue in order and return the payloads to run.
@@ -115,3 +136,44 @@ def issue_in_order(root: Path, batch: str, queue: list[dict], payload_of: Callab
         save()
         issued.append(payload)
     return issued
+
+
+def require_issued(entry: dict, *, noun: str) -> dict:
+    """The entry, if it is issued; only an issued entry can be recorded as done or failed."""
+    if entry.get("state") != "issued":
+        raise CineRecastError(f"{noun} {entry.get('id')} is {entry.get('state')}, not issued; "
+                              f"only an issued {noun} can be recorded")
+    return entry
+
+
+def require_result(entry: dict, provider_id: str, credits: float, *, noun: str) -> None:
+    """Refuse a result without a provider id or with credits that are not a finite number of at least 0."""
+    if not is_text(provider_id):
+        raise CineRecastError(f"{noun} {entry.get('id')}: provider_id must not be empty")
+    if not is_number(credits) or credits < 0:
+        raise CineRecastError(f"{noun} {entry.get('id')}: credits must be a finite number of at least 0: {credits!r}")
+
+
+def finish(root: Path, entry: dict, provider_id: str, credits: float, undo: Callable[[], None],
+           save: Callable[[], None]) -> None:
+    """Record an issued entry as done in the ledger once the caller has stored its returned files.
+
+    If the ledger refuses, undo() removes what the caller stored, so a refused call leaves nothing
+    behind. Otherwise the entry becomes done and save() is called.
+    """
+    try:
+        ledger.done(root, entry["id"], provider_id, credits)
+    except BaseException:
+        undo()
+        raise
+    entry["state"] = "done"
+    save()
+
+
+def fail(root: Path, entry: dict, reason: str, credits: float, save: Callable[[], None], *, noun: str) -> dict:
+    """Record an issued entry as failed in the ledger (credits spent, if any), save, and return it."""
+    require_issued(entry, noun=noun)
+    ledger.fail(root, entry["id"], reason, credits)
+    entry["state"] = "failed"
+    save()
+    return entry

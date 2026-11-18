@@ -91,3 +91,10 @@ def test_a_person_generated_from_reference_images_needs_likeness_consent(assets3
     assert any("likeness_consent" in p and "reference images" in p for p in check(assets3.root))
     set_right(assets3.root, "likeness_consent", "yes")
     assert check(assets3.root) == []
+
+
+def test_an_unreadable_ledger_is_reported_not_raised(assets3, tmp_path):
+    generate_and_use(assets3.root, "hero", tmp_path)
+    with assets3.ledger_file.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("{broken\n")
+    assert any("likeness_consent" in p and "ledger" in p for p in check(assets3.root))

@@ -27,8 +27,8 @@ from cine_recast.analyze import load_video
 from cine_recast.casting import ID_PATTERN, IMAGE_SUFFIXES
 from cine_recast.errors import CineRecastError
 from cine_recast.jsonio import read_json, write_json
-from cine_recast.lifecycle import (SENT, UNISSUED, digest, highest, is_number, is_text, issue_in_order,
-                                   reconcile, resolve, stale_quote)
+from cine_recast.lifecycle import (SENT, digest, fail, finish, highest, is_text, issue_in_order, quote, reconcile,
+                                   require_issued, require_result, resolve, stale_quote)
 from cine_recast.paths import ProjectPaths
 from cine_recast.plan import closest_aspect, valid_models
 from cine_recast.project import load_project
@@ -215,16 +215,14 @@ def set_cost(root: Path, asset_id: str, credits: float) -> dict:
     root = Path(root)
     data = _load(root)
     asset = _find(data, asset_id)
-    if asset.get("state") not in UNISSUED:
-        raise CineRecastError(f"asset {asset_id} is {asset.get('state')}; its quote can no longer change")
-    if not is_number(credits) or credits <= 0:
-        raise CineRecastError(f"asset {asset_id}: credits must be a finite number greater than 0: {credits!r}")
-    problems = _problems(root, asset, valid_models(root), _elements(root))
-    if problems:
-        raise CineRecastError("; ".join(problems))
-    asset["est_credits"] = float(credits)
-    asset["quote_digest"] = digest(_payload(root, asset))
-    asset["state"] = "quoted"
+
+    def checked_payload() -> dict:
+        problems = _problems(root, asset, valid_models(root), _elements(root))
+        if problems:
+            raise CineRecastError("; ".join(problems))
+        return _payload(root, asset)
+
+    quote(asset, credits, checked_payload, noun=_NOUN)
     _save(root, data)
     return asset
 
@@ -255,40 +253,35 @@ def issue_next(root: Path, batch: str) -> list[dict]:
                           noun=_NOUN, command=_QUOTE_COMMAND)
 
 
-def _issued(data: dict, asset_id: str) -> dict:
-    asset = _find(data, asset_id)
-    if asset.get("state") != "issued":
-        raise CineRecastError(f"asset {asset_id} is {asset.get('state')}, not issued; "
-                              "only an issued asset can be recorded")
-    return asset
-
-
 def record_done(root: Path, asset_id: str, provider_id: str, credits: float, files: list[Path]) -> dict:
     """Store the returned images as assets/<element>/<id>_<n><suffix>, record the asset as done in
     the ledger, then save. Returns {"asset", "files"} with the stored files relative to the project.
 
-    A name that exists already is never overwritten: the call fails. If the ledger refuses, the
-    files stored by this call are removed, so a refused call leaves nothing behind.
+    A name that exists already is never overwritten: the call fails. A file from the project's own
+    assets/ folder is refused, so a stored image cannot be registered again under another asset. If
+    the ledger refuses, the files stored by this call are removed, so a refused call leaves nothing
+    behind.
     """
     root = Path(root)
     pp = ProjectPaths(root)
     data = _load(root)
-    asset = _issued(data, asset_id)
+    asset = require_issued(_find(data, asset_id), noun=_NOUN)
     element = asset.get("element")
     if not _ASSET_ID.match(asset_id) or not isinstance(element, str) or not ID_PATTERN.match(element):
         raise CineRecastError(f"asset {asset_id}: its id and element {element!r} must be valid ids to name its files")
-    if not is_text(provider_id):
-        raise CineRecastError(f"asset {asset_id}: provider_id must not be empty")
-    if not is_number(credits) or credits < 0:
-        raise CineRecastError(f"asset {asset_id}: credits must be a finite number of at least 0: {credits!r}")
+    require_result(asset, provider_id, credits, noun=_NOUN)
     sources = [Path(file) for file in files]
     if not sources:
         raise CineRecastError(f"asset {asset_id}: give at least one result file")
+    stored_assets = pp.asset_dir(element).parent.resolve()
     for source in sources:
         if source.suffix.lower() not in IMAGE_SUFFIXES:
             raise CineRecastError(f"asset {asset_id}: result file {source} must be a .jpg, .jpeg, .png or .webp file")
         if not source.is_file():
             raise CineRecastError(f"asset {asset_id}: result file not found: {source}")
+        if source.resolve().is_relative_to(stored_assets):
+            raise CineRecastError(f"asset {asset_id}: result file {source} lies inside the project's assets folder; "
+                                  "give the file the provider returned")
     folder = pp.asset_dir(element)
     targets = [folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
     for target in targets:
@@ -297,20 +290,22 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
                                   "stored files are never overwritten")
     folder.mkdir(parents=True, exist_ok=True)
     stored: list[Path] = []
+
+    def undo() -> None:
+        for target in stored:  # only the files made by this call
+            target.unlink(missing_ok=True)
+
     try:
         for source, target in zip(sources, targets):
             with source.open("rb") as reader, target.open("xb") as writer:  # "x": never overwrite
                 stored.append(target)
                 shutil.copyfileobj(reader, writer)
-        ledger.done(root, asset_id, provider_id, credits)
     except BaseException:
-        for target in stored:  # only the files made by this call
-            target.unlink(missing_ok=True)
+        undo()
         raise
     names = [target.relative_to(root).as_posix() for target in targets]
-    asset["files"] = names
-    asset["state"] = "done"
-    _save(root, data)
+    asset["files"] = names  # saved only once the ledger records the asset as done
+    finish(root, asset, provider_id, credits, undo, lambda: _save(root, data))
     return {"asset": asset_id, "files": names}
 
 
@@ -318,11 +313,7 @@ def record_fail(root: Path, asset_id: str, reason: str, credits: float = 0.0) ->
     """Record an issued asset as failed in the ledger (credits spent, if any) and return the asset."""
     root = Path(root)
     data = _load(root)
-    asset = _issued(data, asset_id)
-    ledger.fail(root, asset_id, reason, credits)
-    asset["state"] = "failed"
-    _save(root, data)
-    return asset
+    return fail(root, _find(data, asset_id), reason, credits, lambda: _save(root, data), noun=_NOUN)
 
 
 # --- generated files and the swap table ----------------------------------------------------
@@ -339,12 +330,15 @@ def _sent_without_refs(asset: dict) -> bool:
 
 
 def _stored_files(root: Path, element: str, *, ref_free: bool) -> list[str]:
+    """Files of the element's assets that the ledger records as done (a "done" written into
+    assets.json alone does not count), optionally only of assets sent without refs."""
     root = Path(root)
     folder = ProjectPaths(root).asset_dir(element).relative_to(root).as_posix()
     suffixes = "|".join(re.escape(suffix) for suffix in IMAGE_SUFFIXES)
     found: list[str] = []
+    states = ledger.job_states(root)
     done = [a for a in _load(root)["assets"]
-            if isinstance(a, dict) and a.get("element") == element and a.get("state") == "done"
+            if isinstance(a, dict) and a.get("element") == element and states.get(a.get("id")) == "done"
             and (not ref_free or _sent_without_refs(a))]
     for asset in sorted(done, key=_number):
         aid = asset.get("id")

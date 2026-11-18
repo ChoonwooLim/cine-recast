@@ -187,3 +187,30 @@ def test_clearing_refs_afterwards_does_not_make_a_virtual_person(assets3, tmp_pa
     data = read_json(assets3.assets_file); data["assets"][0]["refs"] = []; write_json(assets3.assets_file, data)
     assert ref_free_files(assets3.root, "hero") == []                           # the quote binds what was sent
     assert any("likeness_consent" in p for p in check(assets3.root))
+
+
+# --- fix round 1: generated files come from the ledger, and done takes no file of assets/ ---
+
+def test_a_done_written_by_hand_does_not_count_as_generated(assets3):
+    root = assets3.root
+    _issued(root, "hero")
+    issue_next(root, "assets-1")                                                # a0001 issued, never finished
+    png(assets3.asset_dir("hero") / "a0001_1.png")
+    data = read_json(assets3.assets_file)
+    data["assets"][0].update(state="done", files=["assets/hero/a0001_1.png"]); write_json(assets3.assets_file, data)
+    assert generated_files(root, "hero") == [] and ref_free_files(root, "hero") == []
+    c = read_json(assets3.casting_file)
+    c["swaps"] = [{"element": "hero", "images": ["assets/hero/a0001_1.png"], "note": ""}]
+    write_json(assets3.casting_file, c)
+    assert any("likeness_consent" in p for p in check(root))
+
+
+def test_done_refuses_a_file_from_the_project_assets_folder(assets3, tmp_path):
+    root = assets3.root
+    first = generate_and_use(root, "hero", tmp_path)                            # a0001 done
+    add(root, element="hero", prompt=PROMPT, model="image_model_x", batch="assets-1")
+    set_cost(root, "a0002", 1.0); approve(root, "assets-1", 1.0, "owner"); issue_next(root, "assets-1")
+    with pytest.raises(CineRecastError, match="assets folder"):
+        record_done(root, "a0002", "prov-2", 1.0, [root / first])
+    assert [p.name for p in assets3.asset_dir("hero").iterdir()] == ["a0001_1.png"]
+    assert job_states(root)["a0002"] == "issued"

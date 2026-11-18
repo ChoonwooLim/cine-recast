@@ -29,8 +29,8 @@ from cine_recast.errors import CineRecastError
 from cine_recast.ffmpeg import cut_frames
 from cine_recast.jsonio import read_json, write_json
 from cine_recast.lifecycle import IssueRefused  # noqa: F401  (callers catch plan.IssueRefused)
-from cine_recast.lifecycle import (SENT, UNISSUED, digest, highest, is_number, is_text, issue_in_order, now,
-                                   reconcile, resolve, stale_quote)
+from cine_recast.lifecycle import (SENT, UNISSUED, fail, finish, highest, is_number, is_text, issue_in_order, now,
+                                   quote, reconcile, require_issued, require_result, resolve, stale_quote)
 from cine_recast.paths import ProjectPaths
 from cine_recast.project import load_project
 from cine_recast.textrules import is_english_prompt
@@ -492,14 +492,7 @@ def set_cost(root: Path, job_id: str, credits: float) -> dict:
     root = Path(root)
     data = load(root)
     job = _find_job(data, job_id)
-    if job.get("state") not in UNISSUED:
-        raise CineRecastError(f"job {job_id} is {job.get('state')}; its quote can no longer change")
-    if not is_number(credits) or credits <= 0:
-        raise CineRecastError(f"job {job_id}: credits must be a finite number greater than 0: {credits!r}")
-    payload = _payload(root, data, valid_models(root), job)
-    job["est_credits"] = float(credits)
-    job["quote_digest"] = digest(payload)
-    job["state"] = "quoted"
+    quote(job, credits, lambda: _payload(root, data, valid_models(root), job), noun="job")
     _save(root, data)
     return job
 
@@ -540,13 +533,6 @@ def issue_next(root: Path, batch: str) -> list[dict]:
                           lambda: _save(root, data), noun="job", command="jobs set-cost")
 
 
-def _issued_job(data: dict, job_id: str) -> dict:
-    job = _find_job(data, job_id)
-    if job.get("state") != "issued":
-        raise CineRecastError(f"job {job_id} is {job.get('state')}, not issued; only an issued job can be recorded")
-    return job
-
-
 def _job_has_take(root: Path, unit_id: str, job_id: str) -> bool:
     from cine_recast.takes import list_takes  # takes imports this module
 
@@ -577,12 +563,9 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
         raise CineRecastError(
             f"job {job_id} is already done in the ledger but no take was stored for it; register the "
             "file again with a new job: jobs add, then jobs set-cost, jobs next and jobs done")
-    job = _issued_job(data, job_id)
+    require_issued(job, noun="job")
     _find_unit(data, unit_id)
-    if not is_text(provider_id):
-        raise CineRecastError(f"job {job_id}: provider_id must not be empty")
-    if not is_number(credits) or credits < 0:
-        raise CineRecastError(f"job {job_id}: credits must be a finite number of at least 0: {credits!r}")
+    require_result(job, provider_id, credits, noun="job")
     source = Path(file)
     if not source.is_file():
         raise CineRecastError(f"job {job_id}: result file not found: {source}")
@@ -590,13 +573,9 @@ def record_done(root: Path, job_id: str, provider_id: str, credits: float, file:
         "job": job_id, "provider_id": provider_id, "credits": float(credits),
         "quality": job.get("quality"), "recorded_at": now(),
     })
-    try:
-        ledger.done(root, job_id, provider_id, credits)
-    except BaseException:
-        shutil.rmtree(ProjectPaths(root).take_dir(unit_id, take), ignore_errors=True)
-        raise
-    job["state"] = "done"
-    _save(root, data)
+    finish(root, job, provider_id, credits,
+           lambda: shutil.rmtree(ProjectPaths(root).take_dir(unit_id, take), ignore_errors=True),
+           lambda: _save(root, data))
     return {"unit": unit_id, "take": take}
 
 
@@ -604,8 +583,4 @@ def record_fail(root: Path, job_id: str, reason: str, credits: float = 0.0) -> d
     """Record an issued job as failed in the ledger (credits spent, if any) and return the job."""
     root = Path(root)
     data = load(root)
-    job = _issued_job(data, job_id)
-    ledger.fail(root, job_id, reason, credits)
-    job["state"] = "failed"
-    _save(root, data)
-    return job
+    return fail(root, _find_job(data, job_id), reason, credits, lambda: _save(root, data), noun="job")
