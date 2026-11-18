@@ -225,6 +225,7 @@ def test_assemble_refuses_audio_that_carries_the_reference_sound(noisy_film, tmp
     with pytest.raises(CineRecastError, match="reference") as refused:
         assemble(noisy_film.root, audio=noisy_film.reference_sound)        # a copy kept outside the project
     assert "correlation" in refused.value.message
+    assert "sustained tone on the same pitch" in refused.value.message and "listen" in refused.value.message  # I5
     assert not (noisy_film.out_dir / "final.mp4").exists() and not (noisy_film.out_dir / "master.mov").exists()
     unrelated = tmp_path / "score.wav"
     run(["-f", "lavfi", "-i", "anoisesrc=color=pink:seed=99:amplitude=0.5:duration=4", str(unrelated)])

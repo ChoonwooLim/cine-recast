@@ -127,7 +127,10 @@ def assemble(root: Path, *, audio: Path | None = None, silent: bool = False, pre
         _, problem = soundtrack.reference_problem(root, sound_file, f"the film's audio ({described})")
         if problem:
             raise CineRecastError(f"{problem}; the film's sound must be made for the film, the sound of the reference "
-                                  "is never used; nothing written")
+                                  "is never used; a sustained tone on the same pitch as the reference (a drone or pad "
+                                  "on the same note) reaches the limit too, so ask the user to listen: if it is the "
+                                  "reference's sound, leave it out; if it is not, make that music again in another key "
+                                  "(sound mix names the sound of a soundtrack that does this); nothing written")
     samples = round(Fraction(info.frames * info.fps_den * SOUND_RATE, info.fps_num))
     fit = ["-af", f"aresample={SOUND_RATE},apad=whole_len={samples},atrim=end_sample={samples}"]
     pp.out_dir.mkdir(parents=True, exist_ok=True)

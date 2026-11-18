@@ -21,15 +21,19 @@ sample) and out/soundtrack.json:
    What the measure still cannot catch: a copy shifted by more than MAX_LAG from its place in the
    reference; a copy buried in every window under other sound with about four times its energy
    (6 dB louder); a copy changed in pitch, speed or spectrum; an excerpt much shorter than a window
-   under other sound. Two unrelated sounds that hold the same steady pitch for a whole window can
-   also reach the limit and be refused.
+   under other sound. Two unrelated sounds that hold the same steady pitch for a whole window (a
+   drone or pad on the reference's note, a mains hum) also reach the limit, as similar as a copy
+   would be; the refusal says so and leaves the judgement to the user's ears.
 
 Both files are written to scratch names in out/ and moved into place only when everything passed. A
 refused mix also removes the soundtrack an earlier mix left, so no soundtrack older than the refusal
-remains. check() is what assemble uses: it returns the soundtrack only while its bytes are the ones
-mixed, and assemble runs reference_problem on whatever audio goes into the deliverable.
+remains; a file another program holds open is a refusal that says so, and the record goes first, so
+a soundtrack that could not be removed no longer passes check(). check() is what assemble uses: it
+returns the soundtrack only while its bytes are the ones mixed, and assemble runs reference_problem
+on whatever audio goes into the deliverable.
 """
 
+import contextlib
 import json
 import math
 import os
@@ -217,8 +221,9 @@ def reference_problem(root: Path, audio: Path, what: str) -> tuple[float | None,
     whole, window = _similarity(decode_audio(audio, rate=CHECK_RATE, channels=1)[:, 0], theirs)
     if max(whole, window) < REFERENCE_LIMIT:
         return whole, None
-    return whole, (f"{what} carries the sound of the reference video (correlation {whole:.3f} over the whole film, "
-                   f"{window:.3f} in the most similar {WINDOW:g}-second window; the limit is {REFERENCE_LIMIT})")
+    return whole, (f"{what} is as similar to the sound of the reference video as a copy would be (correlation "
+                   f"{whole:.3f} over the whole film, {window:.3f} in the most similar {WINDOW:g}-second window; the "
+                   f"limit is {REFERENCE_LIMIT})")
 
 
 def _to_check_rate(samples: np.ndarray) -> np.ndarray:
@@ -296,11 +301,33 @@ def mix(root: Path) -> dict:
         return _mix(root)
     except ToolNotFound:
         raise                                       # the machine lacks ffmpeg: not a refused mix
-    except CineRecastError:
-        pp = ProjectPaths(root)
-        pp.soundtrack_file.unlink(missing_ok=True)
-        pp.soundtrack_record.unlink(missing_ok=True)
+    except CineRecastError as exc:
+        left = _remove_soundtrack(ProjectPaths(root))
+        if left:
+            raise CineRecastError(f"{exc.message}; {left}") from exc
         raise
+
+
+def _remove_soundtrack(pp: ProjectPaths) -> str | None:
+    """Remove the soundtrack an earlier mix left, the record first: a soundtrack.wav that cannot be
+    removed (held open by another program) then has no record, and check() refuses it. Returns what
+    could not be removed as a sentence, or None."""
+    held = []
+    for path in (pp.soundtrack_record, pp.soundtrack_file):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            held.append(f"{path.relative_to(pp.root).as_posix()} ({exc.strerror or exc})")
+    if not held:
+        return None
+    if not pp.soundtrack_file.exists():
+        verdict = "no soundtrack is left"
+    elif not pp.soundtrack_record.exists():
+        verdict = "assemble refuses that soundtrack until sound mix runs again"
+    else:
+        verdict = "assemble would still take the earlier soundtrack, so do not assemble before sound mix succeeds"
+    return (f"the earlier soundtrack could not be removed: {', '.join(held)} (is it open in another program?); close "
+            f"it and run sound mix again; {verdict}")
 
 
 def _mix(root: Path) -> dict:
@@ -346,9 +373,12 @@ def _mix(root: Path) -> dict:
             carriers = _carriers(root, placed, info, _reference_samples(root))
             named = ", ".join(f"{sid} (correlation {value:.3f} alone)" for sid, value in carriers)
             raise CineRecastError(
-                f"{problem}; it comes from sound(s) {named}; a sound of the reference was registered as a generated "
-                "sound: mute it with sound set --mute or replace it with a newly generated one; no soundtrack "
-                "written, and an earlier soundtrack was removed")
+                f"{problem}; it comes from sound(s) {named}; either a sound of the reference was registered as a "
+                "generated sound, or the named sound holds a sustained tone on the same pitch as the reference (a "
+                "drone or pad on the same note reaches the limit too); the tool cannot tell the two apart, so ask "
+                "the user to listen to the named sound: if it is the reference's sound, mute it with sound set "
+                "--mute; if it is not, generate the cue again in another key with sound add and mute this one; no "
+                "soundtrack written, and an earlier one is removed")
         record = {
             "sounds": [{"id": item["id"], "kind": item.get("kind"), "label": item.get("label"),
                         "start_seconds": round(float(item["at_frame"] / fps), 6), "at_frame": item["at_frame"],
@@ -363,11 +393,16 @@ def _mix(root: Path) -> dict:
             "cuts": _cut_list(root, placed),
         }
         write_json(record_scratch, record)
-        scratch.replace(pp.soundtrack_file)
-        record_scratch.replace(pp.soundtrack_record)
+        try:
+            scratch.replace(pp.soundtrack_file)
+            record_scratch.replace(pp.soundtrack_record)
+        except OSError as exc:
+            raise CineRecastError(f"cannot replace {pp.soundtrack_file} (is it open in another program?): "
+                                  f"{exc.strerror or exc}; no soundtrack written") from exc
     finally:
-        scratch.unlink(missing_ok=True)
-        record_scratch.unlink(missing_ok=True)
+        for leftover in (scratch, record_scratch):
+            with contextlib.suppress(OSError):          # a scratch name of out/, never read again
+                leftover.unlink(missing_ok=True)
     return {**record, "path": pp.soundtrack_file}
 
 

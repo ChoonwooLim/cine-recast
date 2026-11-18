@@ -320,3 +320,71 @@ def test_an_unreadable_reference_refuses_the_mix(noisy, tmp_path):
     with pytest.raises(CineRecastError, match="reference video cannot be read"):
         soundtrack.mix(root)
     assert not noisy.out_dir.exists() or not any(noisy.out_dir.iterdir())
+
+
+# --- final review 2: the refusal's wording (I5), a soundtrack held open by another program (m1)
+
+def test_i5_the_refusal_says_what_the_similarity_means_and_what_to_do(noisy):
+    root = noisy.root
+    done_sound(root, noisy.reference_sound, kind="ambience", seconds=4)
+    with pytest.raises(CineRecastError) as refused:
+        soundtrack.mix(root)
+    message = refused.value.message
+    assert "as similar to the sound of the reference video as a copy would be" in message
+    assert "sustained tone on the same pitch" in message and "listen" in message
+    assert "sound set --mute" in message and "another key" in message
+    assert "a sound of the reference was registered as a generated sound:" not in message   # no longer stated as fact
+    assert "s0001" in message.split("sound(s)")[1].split(";")[0]
+
+
+def _held_open(monkeypatch, *held):
+    """Make Path.replace onto, and Path.unlink of, the given files fail as for a file another program
+    holds open on Windows."""
+    from pathlib import Path
+
+    real_replace, real_unlink = Path.replace, Path.unlink
+    names = {str(path) for path in held}
+
+    def replace(self, target):
+        if str(target) in names:
+            raise PermissionError(5, "Access is denied", str(target))
+        return real_replace(self, target)
+
+    def unlink(self, missing_ok=False):
+        if str(self) in names and self.exists():
+            raise PermissionError(32, "The process cannot access the file because it is being used by another "
+                                      "process", str(self))
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+
+def test_m1_a_soundtrack_held_open_is_a_refusal_and_assemble_will_not_use_it(sound3, tmp_path, monkeypatch, capsys):
+    """Probe E1: a second sound mix while out/soundtrack.wav is open."""
+    root = sound3.root
+    done_sound(root, make_tone(tmp_path / "a.wav", 1), seconds=1)
+    soundtrack.mix(root)
+    _held_open(monkeypatch, sound3.soundtrack_file)
+    capsys.readouterr()
+    assert main(["sound", "mix", str(root)]) == 2
+    err = capsys.readouterr().err
+    assert "open in another program" in err and "defect" not in err
+    assert not sound3.soundtrack_record.exists()                           # the old soundtrack no longer verifies
+    with pytest.raises(CineRecastError, match="run sound mix again"):
+        soundtrack.check(root)
+
+
+def test_m1_a_refused_mix_shows_its_reason_when_the_old_soundtrack_is_held_open(sound3, tmp_path, monkeypatch, capsys):
+    """Probe E2: a mix refused for its own reason while out/soundtrack.wav is open."""
+    root = sound3.root
+    done_sound(root, make_tone(tmp_path / "a.wav", 1), seconds=1)
+    soundtrack.mix(root)
+    sound.set_placement(root, "s0001", mute=True)
+    _held_open(monkeypatch, sound3.soundtrack_file)
+    capsys.readouterr()
+    assert main(["sound", "mix", str(root)]) == 2
+    err = capsys.readouterr().err
+    assert "no sound is done" in err and "open in another program" in err and "defect" not in err
+    with pytest.raises(CineRecastError, match="run sound mix again"):
+        soundtrack.check(root)
