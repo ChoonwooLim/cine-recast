@@ -308,7 +308,8 @@ def _build_parser() -> argparse.ArgumentParser:
     plan_build.add_argument("--max-unit-seconds", type=float, default=None,
                             help="unit length cap below the model's max_seconds")
     plan_build.add_argument("--replace", action="store_true",
-                            help="rebuild an existing plan (only while no job has been issued)")
+                            help="rebuild an existing plan: archive it under plans/ and give the new units and "
+                                 "jobs ids never used before (refused while a job is issued and not finished)")
     plan_build.set_defaults(func=_cmd_plan_build)
     plan_check = plan_sub.add_parser("check", help="check prompts, input files and model limits")
     plan_check.add_argument("project", help="project folder")

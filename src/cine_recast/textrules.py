@@ -3,10 +3,21 @@ _HAN_RANGES = (
     (0x3005, 0x3007),
     (0x3021, 0x3029),
     (0x3038, 0x303B),
+    (0x3100, 0x312F),       # Bopomofo
+    (0x31A0, 0x31BF),       # Bopomofo extended
+    (0x31C0, 0x31EF),       # CJK strokes
+    (0x3220, 0x3247),       # parenthesized and circled ideographs (0x3200-0x321E and 0x3260-0x327F are Hangul)
+    (0x3280, 0x32B0),
+    (0x32C0, 0x32CB),       # ideographic telegraph symbols for months
+    (0x3358, 0x3370),       # ideographic telegraph symbols for hours
+    (0x337B, 0x337F),       # era names
+    (0x33E0, 0x33FE),       # ideographic telegraph symbols for days
     (0x3400, 0x4DBF),
     (0x4E00, 0x9FFF),
     (0xF900, 0xFAFF),
+    (0x1F200, 0x1F2FF),     # enclosed ideographic supplement
     (0x20000, 0x2FA1F),
+    (0x30000, 0x323AF),     # extensions G and H
 )
 _HANGUL_RANGES = (
     (0x1100, 0x11FF),
