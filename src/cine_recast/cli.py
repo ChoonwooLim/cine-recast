@@ -32,9 +32,21 @@ def _cmd_rights_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_picture(text: str) -> tuple[int, int, int, int]:
+    parts = [part.strip() for part in text.split(",")]
+    try:
+        values = tuple(int(part) for part in parts)
+    except ValueError:
+        values = ()
+    if len(values) != 4:
+        raise CineRecastError(f"--picture must be four whole numbers x,y,w,h separated by commas: {text}")
+    return values
+
+
 def _cmd_analyze(args: argparse.Namespace) -> int:
     cuts = _parse_cuts(args.cuts) if args.cuts is not None else None
-    result = analyze(Path(args.project), cuts=cuts)
+    picture = _parse_picture(args.picture) if args.picture is not None else None
+    result = analyze(Path(args.project), cuts=cuts, picture=picture)
     print(f"shots: {result['shots']}  cuts: {result['cuts']}  picture: {result['picture_box']}")
     return 0
 
@@ -258,6 +270,8 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze_p = sub.add_parser("analyze", help="analyze the reference video of a project")
     analyze_p.add_argument("project", help="project folder")
     analyze_p.add_argument("--cuts", help="comma-separated cut frames that replace detection, e.g. 88,130")
+    analyze_p.add_argument("--picture", help="picture area x,y,w,h (even numbers, inside the frame) that replaces "
+                                             "detection, e.g. 0,46,640,268")
     analyze_p.set_defaults(func=_cmd_analyze)
 
     cuts = sub.add_parser("cuts", help="cut tools")

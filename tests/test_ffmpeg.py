@@ -75,6 +75,31 @@ def test_scaling_keeps_mid_grey(tmp_path):
     assert abs(float(rgb.mean()) - float(unscaled.mean())) <= 1
 
 
+def _playlist(tmp_path):
+    """A local playlist whose one segment is a URL (a closed port on this machine, never reached)."""
+    path = tmp_path / "list.m3u8"
+    path.write_text("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nhttp://127.0.0.1:9/seg0.ts\n#EXT-X-ENDLIST\n",
+                    encoding="ascii")
+    return path
+
+
+@pytest.mark.parametrize("call", [
+    lambda path, out: probe(path),
+    lambda path, out: list(iter_frames(path, size=(64, 36))),
+])
+def test_inputs_are_opened_with_the_file_and_pipe_protocols_only(tmp_path, call):
+    with pytest.raises(CineRecastError, match="whitelist 'file,pipe'"):
+        call(_playlist(tmp_path), tmp_path / "x.png")
+
+
+def test_run_puts_the_protocol_whitelist_before_every_input():
+    from cine_recast.ffmpeg import _guard_inputs
+
+    assert _guard_inputs(["-f", "concat", "-i", "a.txt", "-i", "b.wav", "-map", "0:v", "out.mp4"]) == [
+        "-f", "concat", "-protocol_whitelist", "file,pipe", "-i", "a.txt",
+        "-protocol_whitelist", "file,pipe", "-i", "b.wav", "-map", "0:v", "out.mp4"]
+
+
 def test_probe_size_matches_probe(clip3):
     info = probe(clip3)
     assert probe_size(clip3) == (info.width, info.height)

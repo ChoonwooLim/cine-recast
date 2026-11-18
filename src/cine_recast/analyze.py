@@ -11,7 +11,7 @@ from cine_recast.ffmpeg import VideoInfo, cut_frames, extract_still, iter_frames
 from cine_recast.jsonio import read_project_json, write_json
 from cine_recast.measure import measure_clip
 from cine_recast.paths import ProjectPaths
-from cine_recast.picture import PictureBox, detect_picture_box
+from cine_recast.picture import PictureBox, detect_picture_box, given_picture_box
 from cine_recast.project import load_project
 
 CELL_WIDTH = 320
@@ -58,19 +58,27 @@ def load_shots(root: Path) -> list[Shot]:
     return shots_from_cuts(_load_cuts(root), info.frames)
 
 
-def analyze(root: Path, *, cuts: list[int] | None = None) -> dict:
+def analyze(root: Path, *, cuts: list[int] | None = None,
+            picture: tuple[int, int, int, int] | None = None) -> dict:
     """Write analysis/video.json, cuts.json and one folder per shot (clip, stills, measured sheet).
 
-    Re-running replaces the shots.
+    `cuts` replaces cut detection and `picture` (x, y, w, h) the picture-area detection; video.json
+    records the area's source as picture_source "given" or "detected" (a project analysed before the
+    key existed reads as "detected"). Re-running replaces the shots. Refused once a plan exists.
     """
     root = Path(root)
     pp = ProjectPaths(root)
     load_project(root)
     if pp.plan_file.exists():
-        raise CineRecastError("plan exists; analysis is frozen")
+        raise CineRecastError("plan.json exists, so the analysis is frozen: the cuts and the picture area are fixed "
+                              "once a plan exists; to change them, start a new project folder with init (takes "
+                              "made so far do not carry over)")
     ref = _reference(root)
     info = probe(ref)
-    box = detect_picture_box(ref, info)
+    if picture is None:
+        box, picture_source = detect_picture_box(ref, info), "detected"
+    else:
+        box, picture_source = given_picture_box(picture, info.width, info.height), "given"
     if cuts is None:
         cut_list, source = detect_cuts(ref, info, box), "detected"
     else:
@@ -80,7 +88,7 @@ def analyze(root: Path, *, cuts: list[int] | None = None) -> dict:
     write_json(pp.video_file, {
         "width": info.width, "height": info.height, "fps_num": info.fps_num, "fps_den": info.fps_den,
         "frames": info.frames, "duration": info.duration, "has_audio": info.has_audio,
-        "pix_fmt": info.pix_fmt, "picture_box": box.to_dict(),
+        "pix_fmt": info.pix_fmt, "picture_box": box.to_dict(), "picture_source": picture_source,
     })
     write_json(pp.cuts_file, {"cuts": cut_list, "source": source})
 

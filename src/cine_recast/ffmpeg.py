@@ -35,10 +35,25 @@ def _tail(text: str) -> str:
     return text.strip()[-400:]
 
 
+# Every file ffmpeg or ffprobe opens is a local file (or a pipe): a playlist or list file given as an
+# input must never make them open a URL, since the tool makes no network calls.
+PROTOCOLS = ["-protocol_whitelist", "file,pipe"]
+
+
+def _guard_inputs(args: list[str]) -> list[str]:
+    """args with PROTOCOLS put in front of every "-i" (an input option applies to the next input)."""
+    guarded: list[str] = []
+    for arg in args:
+        if arg == "-i":
+            guarded += PROTOCOLS
+        guarded.append(arg)
+    return guarded
+
+
 def _ffprobe(path: Path, args: list[str]) -> dict:
     try:
         proc = subprocess.run(
-            ["ffprobe", "-v", "error", *args, "-of", "json", str(path)],
+            ["ffprobe", "-v", "error", *args, "-of", "json", *PROTOCOLS, str(path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError as exc:
@@ -78,6 +93,49 @@ def probe(path: Path) -> VideoInfo:
     )
 
 
+def _rate(text) -> Fraction:
+    """An ffprobe rate such as "24000/1001"; 0 when absent or unknown ("0/0")."""
+    num, _, den = str(text or "").partition("/")
+    try:
+        n, d = int(num), int(den or 1)
+    except ValueError:
+        return Fraction(0)
+    return Fraction(n, d) if d else Fraction(0)
+
+
+def stream_facts(path: Path) -> dict:
+    """What decides whether a file can serve as a reference, without decoding a frame.
+
+    Returns {"video": bool (a video stream exists), "formats": the container's format_name tokens,
+    "rotation": degrees from the first video stream's display matrix or rotate tag (0.0 when none),
+    "sar": its sample aspect ratio as a Fraction, or None when absent or unknown,
+    "avg_rate", "r_rate": its avg_frame_rate and r_frame_rate as Fractions (0 when unknown)}.
+    Raises CineRecastError when ffprobe cannot read the file.
+    """
+    path = Path(path)
+    data = _ffprobe(path, ["-select_streams", "v:0", "-show_entries",
+                           "stream=codec_type,r_frame_rate,avg_frame_rate,sample_aspect_ratio"
+                           ":stream_side_data=rotation:stream_tags=rotate:format=format_name"])
+    formats = [token for token in str((data.get("format") or {}).get("format_name") or "").split(",") if token]
+    streams = data.get("streams") or []
+    if not streams:
+        return {"video": False, "formats": formats, "rotation": 0.0, "sar": None,
+                "avg_rate": Fraction(0), "r_rate": Fraction(0)}
+    s = streams[0]
+    rotation = 0.0
+    for value in [*(entry.get("rotation") for entry in s.get("side_data_list") or [] if isinstance(entry, dict)),
+                  (s.get("tags") or {}).get("rotate")]:
+        try:
+            if value is not None and float(value) % 360 != 0:
+                rotation = float(value)
+        except (TypeError, ValueError):
+            continue
+    num, _, den = str(s.get("sample_aspect_ratio") or "").partition(":")
+    sar = Fraction(int(num), int(den)) if num.isdigit() and den.isdigit() and int(num) and int(den) else None
+    return {"video": True, "formats": formats, "rotation": rotation, "sar": sar,
+            "avg_rate": _rate(s.get("avg_frame_rate")), "r_rate": _rate(s.get("r_frame_rate"))}
+
+
 def probe_size(path: Path) -> tuple[int, int]:
     """(width, height) from stream metadata only; no frame is decoded."""
     path = Path(path)
@@ -89,10 +147,13 @@ def probe_size(path: Path) -> tuple[int, int]:
 
 
 def run(args: list[str]) -> None:
-    """Run ffmpeg with the given arguments. Raises CineRecastError with the stderr tail on failure."""
+    """Run ffmpeg with the given arguments. Raises CineRecastError with the stderr tail on failure.
+
+    Every input ("-i") is opened with the file and pipe protocols only.
+    """
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-nostdin", "-y", *args],
+            ["ffmpeg", "-hide_banner", "-nostdin", "-y", *_guard_inputs(args)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except FileNotFoundError as exc:
@@ -141,7 +202,7 @@ def iter_frames(path: Path, *, size: tuple[int, int] | None = None, crop: Crop |
     pix = "gray" if gray else "rgb24"
     channels = 1 if gray else 3
     frame_bytes = out_w * out_h * channels
-    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-i", str(path),
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", *PROTOCOLS, "-i", str(path),
            "-vf", ",".join(filters), "-fps_mode", "passthrough",
            "-f", "rawvideo", "-pix_fmt", pix, "pipe:1"]
     with tempfile.TemporaryFile() as err:

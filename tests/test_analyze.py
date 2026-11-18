@@ -26,8 +26,52 @@ def test_manual_cuts_override(project3):
 def test_analysis_is_frozen_once_a_plan_exists(project3):
     analyze(project3.root)
     write_json(project3.plan_file, {"units": [], "jobs": []})
-    with pytest.raises(CineRecastError, match="frozen"):
+    with pytest.raises(CineRecastError, match="frozen") as refused:
         analyze(project3.root)
+    assert "picture area" in refused.value.message and "new project folder" in refused.value.message
+
+
+# --- final-review wave: a picture area the agent gives ---
+
+def test_given_picture_area_replaces_detection(project3):
+    result = analyze(project3.root, picture=(0, 28, 384, 160))
+    data = read_json(project3.video_file)
+    assert data["picture_box"] == result["picture_box"] == {"x": 0, "y": 28, "w": 384, "h": 160}
+    assert data["picture_source"] == "given" and result["cuts"] == [30, 54]
+    info = probe(project3.shot_dir(1) / "ref.mp4")
+    assert (info.width, info.height) == (384, 160)
+
+
+def test_detected_picture_area_is_marked(project3):
+    analyze(project3.root)
+    assert read_json(project3.video_file)["picture_source"] == "detected"
+
+
+@pytest.mark.parametrize("picture, fragment", [
+    ((1, 28, 380, 160), "even"),
+    ((0, 28, 384, 161), "even"),
+    ((0, 28, 386, 160), "inside"),
+    ((-2, 0, 100, 100), "inside"),
+    ((0, 0, 0, 216), "greater than 0"),
+])
+def test_given_picture_area_is_validated(project3, picture, fragment):
+    with pytest.raises(CineRecastError, match=fragment):
+        analyze(project3.root, picture=picture)
+    assert not project3.video_file.exists()
+
+
+def test_cli_picture_and_cuts_together(project3, capsys):
+    capsys.readouterr()
+    assert main(["analyze", str(project3.root), "--picture", "0,28,384,160", "--cuts", "30,54"]) == 0
+    assert capsys.readouterr().out.strip() == "shots: 3  cuts: [30, 54]  picture: {'x': 0, 'y': 28, 'w': 384, 'h': 160}"
+    assert read_json(project3.cuts_file)["source"] == "manual" and read_json(project3.video_file)["picture_source"] == "given"
+
+
+@pytest.mark.parametrize("text", ["0,28,384", "0,28,384,160,2", "a,b,c,d", "0.5,28,384,160"])
+def test_cli_refuses_a_malformed_picture(project3, capsys, text):
+    capsys.readouterr()
+    assert main(["analyze", str(project3.root), "--picture", text]) == 2
+    assert "--picture" in capsys.readouterr().err and not project3.video_file.exists()
 
 
 def test_review_strips(project3):

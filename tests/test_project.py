@@ -1,8 +1,81 @@
+from fractions import Fraction
+
 import pytest
+from conftest import _run
 
 from cine_recast.cli import main
 from cine_recast.errors import CineRecastError
-from cine_recast.project import RIGHTS_ITEMS, init_project, load_project, set_right
+from cine_recast.project import RIGHTS_ITEMS, init_project, load_project, reference_problem, set_right
+
+
+def _no_video(tmp, clip):
+    _run(["-f", "lavfi", "-i", "sine=f=440:d=1", str(tmp / "tone.wav")])
+    return tmp / "tone.wav"
+
+
+def _not_media(tmp, clip):
+    (tmp / "notes.mp4").write_text("not a video", encoding="utf-8")
+    return tmp / "notes.mp4"
+
+
+def _gif(tmp, clip):
+    _run(["-i", str(clip), "-frames:v", "12", str(tmp / "clip.gif")])
+    return tmp / "clip.gif"
+
+
+def _rotated(tmp, clip):
+    _run(["-display_rotation", "90", "-i", str(clip), "-c", "copy", str(tmp / "rotated.mp4")])
+    return tmp / "rotated.mp4"
+
+
+def _non_square(tmp, clip):
+    _run(["-i", str(clip), "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp / "sar.mp4")])
+    return tmp / "sar.mp4"
+
+
+def _variable_rate(tmp, clip):
+    _run(["-i", str(clip), "-vf", r"select='if(lt(n\,24)\,not(mod(n\,2))\,1)'", "-fps_mode", "vfr",
+          "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp / "vfr.mp4")])
+    return tmp / "vfr.mp4"
+
+
+@pytest.mark.parametrize("make, fragment", [
+    (_no_video, "no video stream"),
+    (_not_media, "ffprobe cannot read it"),
+    (_gif, "container"),
+    (_rotated, "rotation"),
+    (_non_square, "square"),
+    (_variable_rate, "variable"),
+])
+def test_init_refuses_an_unusable_reference_and_creates_nothing(tmp_path, clip3, capsys, make, fragment):
+    reference = make(tmp_path, clip3)
+    capsys.readouterr()
+    assert main(["init", str(tmp_path / "p"), "--reference", str(reference), "--name", "t"]) == 2
+    err = capsys.readouterr().err
+    assert fragment in err and "re-encode" in err and len(err.strip().splitlines()) == 1
+    assert not (tmp_path / "p").exists()
+
+
+def _facts(**changes):
+    return {"video": True, "formats": ["mov", "mp4"], "rotation": 0.0, "sar": None,
+            "avg_rate": Fraction(24), "r_rate": Fraction(24), **changes}
+
+
+@pytest.mark.parametrize("facts, fragment", [
+    (_facts(), None),
+    (_facts(avg_rate=Fraction(2352, 100)), None),                      # 2.0 % below: still constant
+    (_facts(avg_rate=Fraction(2350, 100)), "variable"),                # more than 2 % below
+    (_facts(avg_rate=Fraction(0)), None),                              # no average given: not judged
+    (_facts(sar=Fraction(1)), None),
+    (_facts(sar=Fraction(4, 3)), "square"),
+    (_facts(rotation=-90.0), "rotation"),
+    (_facts(formats=["matroska", "webm"]), None),
+    (_facts(formats=["mpegts"]), None),
+    (_facts(formats=["hls"]), "container"),
+])
+def test_reference_problem(facts, fragment):
+    problem = reference_problem(facts)
+    assert problem is None if fragment is None else fragment in problem
 
 
 def test_init_creates_project(tmp_path, clip3):

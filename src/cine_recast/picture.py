@@ -37,6 +37,23 @@ class PictureBox:
         return cls(x=int(d["x"]), y=int(d["y"]), w=int(d["w"]), h=int(d["h"]))
 
 
+def given_picture_box(values: tuple[int, int, int, int], width: int, height: int) -> PictureBox:
+    """The picture area x, y, w, h given by hand, checked against a width x height frame: whole
+    numbers, w and h greater than 0, every value even (the scale and crop filters keep even sizes),
+    and the box inside the frame."""
+    if len(values) != 4 or not all(isinstance(v, int) and not isinstance(v, bool) for v in values):
+        raise CineRecastError(f"--picture must be four whole numbers x,y,w,h, not {values!r}")
+    x, y, w, h = values
+    text = f"--picture {x},{y},{w},{h}"
+    if w <= 0 or h <= 0:
+        raise CineRecastError(f"{text}: w and h must be greater than 0")
+    if x < 0 or y < 0 or x + w > width or y + h > height:
+        raise CineRecastError(f"{text}: the area must lie inside the {width}x{height} frame")
+    if any(v % 2 for v in values):
+        raise CineRecastError(f"{text}: x, y, w and h must all be even")
+    return PictureBox(x, y, w, h)
+
+
 def _sample_indices(frames: int, samples: int) -> list[int]:
     """`samples` frame indices spread evenly over the clip, one at the middle of each equal slice."""
     n = max(1, min(samples, frames))

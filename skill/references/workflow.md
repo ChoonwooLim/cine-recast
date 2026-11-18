@@ -58,7 +58,8 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - 쓰는 것: `project.json`, `reference/source.<확장자>`.
 - 출력: `project created: <폴더>`.
-- 거부: 참조 영상 파일이 없다. 프로젝트 폴더가 이미 있고 비어 있지 않다.
+- 무엇이든 만들기 전에 참조 영상을 ffprobe로 읽어 본다. 거부되면 프로젝트 폴더는 생기지 않는다.
+- 거부: 참조 영상 파일이 없다. 프로젝트 폴더가 이미 있고 비어 있지 않다. 참조 영상을 ffprobe가 읽지 못하거나 영상 스트림이 없다. 컨테이너가 mp4/mov 계열, mkv/webm, avi, mpegts, mxf가 아니다. 회전 정보가 0이 아니다. 픽셀이 정사각형이 아니다(sample aspect ratio가 없거나 1:1이어야 한다). 프레임 속도가 가변이다(`avg_frame_rate`와 `r_frame_rate`가 2퍼센트 넘게 다르다). 이때 메시지가 할 일을 알려 준다. 회전 없는 정사각형 픽셀의 고정 프레임 속도 mp4로 다시 인코딩한 뒤 `init`을 다시 한다.
 
 ### rights set
 
@@ -80,13 +81,16 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 ```powershell
 & $cr analyze $p
 & $cr analyze $p --cuts "30,54"
+& $cr analyze $p --picture "0,46,640,268"
 ```
 
-- 쓰는 것: `analysis/video.json`(크기, 프레임 속도, 프레임 수, 화면 영역), `analysis/cuts.json`(컷 목록과 출처), `analysis/shots/NNNN/`의 `ref.mp4`, `sheet.json`, `stills/`.
+- 쓰는 것: `analysis/video.json`(크기, 프레임 속도, 프레임 수, 화면 영역 `picture_box`와 그 출처 `picture_source`), `analysis/cuts.json`(컷 목록과 출처), `analysis/shots/NNNN/`의 `ref.mp4`, `sheet.json`, `stills/`.
 - 출력: `shots: 3  cuts: [30, 54]  picture: {'x': 0, 'y': 0, 'w': 384, 'h': 216}`.
 - `--cuts`: 검출 대신 쓸 컷 전체. 새 숏이 시작하는 프레임 번호를 오름차순으로 적는다. 컷이 하나도 없는 영상은 `--cuts ""`.
+- `--picture`: 검출 대신 쓸 화면 영역. 왼쪽 위 모서리의 x, y와 너비, 높이를 쉼표로 이어 적는다(원래 크기 프레임의 픽셀). 네 값 모두 짝수인 정수이고, 너비와 높이는 0보다 크며, 영역이 프레임 안에 있어야 한다. `--cuts`와 함께 쓸 수 있다. 생략하면 검출한다.
+- `picture_source`: 검출한 영역이면 `detected`, `--picture`로 준 영역이면 `given`. 이 키가 없는 이전 프로젝트는 `detected`로 본다.
 - 다시 실행하면 숏 폴더를 새로 만든다.
-- 거부: `plan.json`이 있다(`plan exists; analysis is frozen`). 컷 번호가 오름차순이 아니거나 영상 밖이다.
+- 거부: `plan.json`이 있다. 계획이 생기면 컷과 화면 영역이 고정되므로, 바꾸려면 새 프로젝트 폴더에서 `init`부터 다시 한다(그때까지 만든 테이크는 넘어가지 않는다). 컷 번호가 오름차순이 아니거나 영상 밖이다. `--picture`가 위 조건에 맞지 않는다.
 
 ### cuts review
 
@@ -515,6 +519,12 @@ ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u01\t001\shots\0003.mov" -vf
 
 ```powershell
 ffmpeg -hide_banner -loglevel error -y -i "$p\out\compare.mp4" -vf "select='not(mod(n\,12))',scale=960:-2,tile=2x8" -frames:v 1 -update 1 "$p\review\compare.png"
+```
+
+**원본 한 프레임, 원래 크기.** 화면 영역을 잴 때 쓴다. 크기를 줄이지 않으므로 이미지의 픽셀 좌표가 곧 `--picture`의 값이다. 화면이 밝은 프레임을 골라 `40`을 바꾼다. 화면의 왼쪽 위 모서리가 x, y이고, 오른쪽 아래 모서리까지가 너비와 높이다. 홀수가 나오면 영역이 화면 안쪽으로 줄어드는 쪽으로 짝수에 맞춘다(x와 y는 올리고, 너비와 높이는 내린다).
+
+```powershell
+ffmpeg -hide_banner -loglevel error -y -i "$p\reference\source.mp4" -vf "select='eq(n\,40)'" -frames:v 1 -update 1 "$p\review\ref_frame_0040.png"
 ```
 
 **원본의 프레임 구간.** 놓친 컷의 정확한 프레임을 찾을 때 쓴다. 프레임 24부터 35까지 열두 장이 왼쪽 위부터 차례로 놓인다. 장면이 바뀌는 칸의 프레임 번호가 컷이다. 참조 영상의 파일 이름은 `project.json`의 `reference`에 있다.
