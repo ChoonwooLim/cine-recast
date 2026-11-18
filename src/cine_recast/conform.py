@@ -12,7 +12,9 @@ its frames. Each shot is then cut from it by frame range as ProRes 422 HQ.
   shot is cut from its own segment, resampled evenly to the shot's frame count when the counts differ.
 
 The raw file and meta.json of the take are only read; the shots/ folder and conform.json are rebuilt
-each run. scan_take reports what helps to choose take_cuts and writes nothing into the take folder.
+each run, the review files of takes review are removed, and when the take is its unit's selected take
+the unit's confirmation is removed (the user has to look at the new picture again). scan_take
+reports what helps to choose take_cuts and writes nothing into the take folder.
 """
 
 import shutil
@@ -29,6 +31,8 @@ from cine_recast.paths import ProjectPaths
 from cine_recast.picture import PictureBox
 from cine_recast.takes import list_takes
 
+REVIEW_FILES = ("review.mp4", "review.jpg")   # written by takes review (review.py)
+
 
 def _raw_file(root: Path, unit_id: str, take_id: str) -> Path:
     known = list_takes(root, unit_id)
@@ -42,7 +46,7 @@ def _raw_file(root: Path, unit_id: str, take_id: str) -> Path:
     return found[0]
 
 
-def _unit_shots(root: Path, item: dict) -> list[Shot]:
+def unit_shots(root: Path, item: dict) -> list[Shot]:
     """The unit's shots from the analysis, in order; they must cover the unit's frames exactly."""
     by_index = {shot.index: shot for shot in load_shots(root)}
     shots = [by_index.get(index) for index in item.get("shots") or []]
@@ -141,7 +145,7 @@ def conform(root: Path, unit_id: str, take_id: str, *, start_frame: int = 0,
     if isinstance(start_frame, bool) or not isinstance(start_frame, int) or start_frame < 0:
         raise CineRecastError(f"start_frame must be a whole number of at least 0: {start_frame!r}")
     info, box = load_video(root)
-    shots = _unit_shots(root, item)
+    shots = unit_shots(root, item)
     unit_frames = item["end"] - item["start"]
     rate = f"{info.fps_num}/{info.fps_den}"
     if take_cuts is not None:
@@ -190,8 +194,11 @@ def conform(root: Path, unit_id: str, take_id: str, *, start_frame: int = 0,
                       "take_cuts": take_cuts, "segments": segments}
 
         target, record_file = folder / "shots", folder / "conform.json"
+        plan.clear_confirmation(root, unit_id, take_id)   # a changed picture has to be looked at again
         try:
             record_file.unlink(missing_ok=True)      # no record describes shots that are being replaced
+            for stale in REVIEW_FILES:               # nor a review of them
+                (folder / stale).unlink(missing_ok=True)
             if target.exists():
                 shutil.rmtree(target)
             staged.replace(target)
@@ -210,15 +217,15 @@ def scan_take(root: Path, unit_id: str, take_id: str) -> dict:
     The take is fitted as conform fits it (_fit), into a temporary folder outside the project that
     is removed afterwards, so nothing is written into the take folder. Returns {"frames": the take's
     frames after the fit, "unit_frames", "pad_frames" (from the plan, 0 when absent), "cuts": the
-    frames where detect_cuts finds a hard cut in the fitted take, "tail_static_from": the first frame
-    of its held tail (held_tail_start), or None}.
+    frames where detect_cuts finds a hard cut in the fitted take, "tail_static_from": the first held
+    copy of its held tail, the frame after the last real frame (held_tail_start), or None}.
     """
     root = Path(root)
     item = plan.unit(root, unit_id)
     pad = plan.pad_frames(item)
     raw = _raw_file(root, unit_id, take_id)
     info, box = load_video(root)
-    _unit_shots(root, item)                     # the unit's start and end are the analysis's
+    unit_shots(root, item)                      # the unit's start and end are the analysis's
     work = Path(tempfile.mkdtemp(prefix="cine-recast-scan-"))
     try:
         fitted = work / "fitted.mov"

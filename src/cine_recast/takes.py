@@ -66,7 +66,8 @@ def new_take(root: Path, unit_id: str, source_file: Path, meta: dict) -> str:
 
 
 def select(root: Path, unit_id: str, take_id: str) -> None:
-    """Record take_id as the unit's selected take in plan.json."""
+    """Record take_id as the unit's selected take in plan.json. Selecting another take than the
+    selected one removes the unit's confirmation: the user has not seen that picture."""
     root = Path(root)
     data = plan.load(root)
     target = next((u for u in data["units"] if isinstance(u, dict) and u.get("id") == unit_id), None)
@@ -75,5 +76,7 @@ def select(root: Path, unit_id: str, take_id: str) -> None:
     takes = list_takes(root, unit_id)
     if take_id not in takes:
         raise CineRecastError(f"unit {unit_id} has no take {take_id}; its takes: {', '.join(takes) or 'none'}")
+    if target.get("selected_take") != take_id:
+        target.pop("confirmed", None)
     target["selected_take"] = take_id
     write_json(ProjectPaths(root).plan_file, data)

@@ -5,7 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import __version__, assemble, assets, conform, ledger, plan, qc, report, sound, soundtrack, takes
+from . import __version__, assemble, assets, conform, ledger, plan, qc, report, review, sound, soundtrack, takes
 from .analyze import analyze, review_strips
 from .casting import check as check_casting
 from .casting import write_template
@@ -307,6 +307,18 @@ def _cmd_takes_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_takes_review(args: argparse.Namespace) -> int:
+    for path in review.review_take(Path(args.project), args.unit, args.take):
+        print(path)
+    return 0
+
+
+def _cmd_takes_confirm(args: argparse.Namespace) -> int:
+    confirmation = review.confirm(Path(args.project), args.unit, args.take, args.by, args.note)
+    print(f"{args.unit}: take {confirmation['take']} confirmed by {confirmation['by']}")
+    return 0
+
+
 def _cmd_takes_cuts(args: argparse.Namespace) -> int:
     _print_json(conform.scan_take(Path(args.project), args.unit, args.take))
     return 0
@@ -337,7 +349,7 @@ def _cmd_qc(args: argparse.Namespace) -> int:
 
 def _cmd_assemble(args: argparse.Namespace) -> int:
     audio = Path(args.audio) if args.audio else None
-    result = assemble.assemble(Path(args.project), audio=audio, silent=args.silent)
+    result = assemble.assemble(Path(args.project), audio=audio, silent=args.silent, preview=args.preview)
     print(result.path)
     print(f"sound: {result.sound}")
     return 0
@@ -613,6 +625,21 @@ def _build_parser() -> argparse.ArgumentParser:
     takes_cuts.add_argument("--unit", required=True)
     takes_cuts.add_argument("--take", required=True)
     takes_cuts.set_defaults(func=_cmd_takes_cuts)
+    takes_review = takes_sub.add_parser("review", help="write review.mp4 (reference left, take right) and review.jpg "
+                                                       "(first, middle and last frames per shot) into a conformed "
+                                                       "take's folder, for the user to look at")
+    takes_review.add_argument("project", help="project folder")
+    takes_review.add_argument("--unit", required=True)
+    takes_review.add_argument("--take", required=True)
+    takes_review.set_defaults(func=_cmd_takes_review)
+    takes_confirm = takes_sub.add_parser("confirm", help="record that the user confirmed the unit's selected, "
+                                                         "conformed take (assemble needs every unit confirmed)")
+    takes_confirm.add_argument("project", help="project folder")
+    takes_confirm.add_argument("--unit", required=True)
+    takes_confirm.add_argument("--take", required=True)
+    takes_confirm.add_argument("--by", required=True, help="the user who confirmed")
+    takes_confirm.add_argument("--note", default="")
+    takes_confirm.set_defaults(func=_cmd_takes_confirm)
 
     conform_p = sub.add_parser("conform", help="fit a take to the reference: one clip per shot, exact frame counts")
     conform_p.add_argument("project", help="project folder")
@@ -634,13 +661,16 @@ def _build_parser() -> argparse.ArgumentParser:
     qc_p.add_argument("--take", required=True)
     qc_p.set_defaults(func=_cmd_qc)
 
-    assemble_p = sub.add_parser("assemble", help="join the selected takes into out/final.mp4 (and "
+    assemble_p = sub.add_parser("assemble", help="join the confirmed selected takes into out/final.mp4 (and "
                                                  "out/master.mov) with the soundtrack when one is mixed")
     assemble_p.add_argument("project", help="project folder")
     sound_choice = assemble_p.add_mutually_exclusive_group()
     sound_choice.add_argument("--audio", help="audio file to put in the film instead of the soundtrack (the reference "
                                               "audio is never used)")
     sound_choice.add_argument("--silent", action="store_true", help="make the film without sound")
+    assemble_p.add_argument("--preview", action="store_true",
+                            help="write only out/preview.mp4 from the selected takes, without needing the user's "
+                                 "confirmations (not with --audio)")
     assemble_p.set_defaults(func=_cmd_assemble)
 
     compare_p = sub.add_parser("compare", help="write out/compare.mp4: reference and result side by side")

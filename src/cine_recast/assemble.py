@@ -1,12 +1,13 @@
 """Join the selected, conformed takes into the finished film and make the side-by-side comparison.
 
-The finished film is built only from conformed takes plus generated sound: the
+The finished film is built only from conformed takes the user confirmed, plus generated sound: the
 soundtrack sound mix wrote (used only while its bytes are the ones mixed) or an audio file the
 caller supplies (an audio file that is the reference's material is refused). The reference video
 is used by compare() alone, and only there is its audio heard.
 
 The sound is cut or padded to the film's length: master.mov carries it as 24-bit PCM, final.mp4 as
-AAC at 256 kb/s.
+AAC at 256 kb/s. A preview (out/preview.mp4) joins the selected takes without the confirmations so
+that the shots can be watched in sequence before they are confirmed.
 """
 
 import tempfile
@@ -28,7 +29,7 @@ _H264 = ["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv4
 
 @dataclass(frozen=True)
 class Assembled:
-    path: Path      # out/final.mp4
+    path: Path      # out/final.mp4, or out/preview.mp4 for a preview
     sound: str      # which sound went in: "soundtrack (3 items)", "file <name>" or "none"
 
 
@@ -69,43 +70,56 @@ def _concat_entry(path: Path) -> str:
     return "file '" + path.resolve().as_posix().replace("'", "'\\''") + "'\n"
 
 
-def _sound(root: Path, *, audio: Path | None, silent: bool) -> tuple[Path | None, str]:
+def _sound(root: Path, *, audio: Path | None, silent: bool, preview: bool) -> tuple[Path | None, str]:
     """(the audio file to put under the picture or None, the description assemble prints)."""
     if silent:
         return None, "none"
     if audio is not None:
         _check_audio(root, Path(audio))
         return Path(audio), f"file {Path(audio).name}"
-    found = soundtrack.check(root)
+    found = soundtrack.check(root, strict=not preview)
     if found is None:
         return None, "none"
     path, record = found
     return path, f"soundtrack ({len(record['sounds'])} items)"
 
 
-def assemble(root: Path, *, audio: Path | None = None, silent: bool = False) -> Assembled:
-    """Write out/master.mov (ProRes, stream copy) and out/final.mp4 and return the film's path and
-    the sound that went in.
+def _unconfirmed(units: list[dict]) -> list[str]:
+    return [item["id"] for item in units if plan.confirmed_take(item) is None]
+
+
+def assemble(root: Path, *, audio: Path | None = None, silent: bool = False, preview: bool = False) -> Assembled:
+    """Write out/master.mov (ProRes, stream copy) and out/final.mp4, or with preview only
+    out/preview.mp4, and return the written film's path and the sound that went in.
 
     The sound is, in this order: none with silent; the audio file given; out/soundtrack.wav when it
-    exists (refused when it is not the file sound mix wrote); none. Every unit needs a selected,
-    conformed take.
+    exists (refused when it is not the file sound mix wrote; a preview leaves such a file out); none.
+    Every unit needs a selected take, conformed and, except for a preview, confirmed by the user.
     """
     root = Path(root)
     pp = ProjectPaths(root)
     if silent and audio is not None:
         raise CineRecastError("--silent makes a film without sound, so it cannot be combined with --audio")
+    if preview and audio is not None:
+        raise CineRecastError("--preview takes the soundtrack when one is mixed, so it cannot be combined with --audio")
     info, _ = load_video(root)
     units = plan.units(root)
     for item in units:
         if not item.get("selected_take"):
             raise CineRecastError(f"unit {item['id']} has no selected take; select one before assembling")
+    if not preview:
+        waiting = _unconfirmed(units)
+        if waiting:
+            raise CineRecastError(
+                f"the user has not confirmed the selected take of unit(s) {', '.join(waiting)}; show each shot with "
+                "takes review and record the user's answer with takes confirm (assemble --preview joins the "
+                "shots without confirmations, to watch them in sequence)")
     clips = _clips_by_shot(root, units)
     shots = load_shots(root)
     missing = [shot.index for shot in shots if shot.index not in clips]
     if missing:
         raise CineRecastError(f"no unit covers shot(s) {', '.join(map(str, missing))}; plan every shot first")
-    sound_file, described = _sound(root, audio=audio, silent=silent)
+    sound_file, described = _sound(root, audio=audio, silent=silent, preview=preview)
     samples = round(Fraction(info.frames * info.fps_den * SOUND_RATE, info.fps_num))
     fit = ["-af", f"aresample={SOUND_RATE},apad=whole_len={samples},atrim=end_sample={samples}"]
     pp.out_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +129,14 @@ def assemble(root: Path, *, audio: Path | None = None, silent: bool = False) -> 
         run(["-f", "concat", "-safe", "0", "-i", str(listing), "-map", "0:v:0", "-c", "copy", "-an", str(joined)])
         got = probe(joined).frames
         if got != info.frames:
-            raise CineRecastError(f"assembled master has {got} frames, the reference has {info.frames}")
+            raise CineRecastError(f"assembled {'preview' if preview else 'master'} has {got} frames, "
+                                  f"the reference has {info.frames}")
+        if preview:
+            out = pp.out_dir / "preview.mp4"
+            args = ["-i", str(joined)] + (["-i", str(sound_file)] if sound_file else []) + ["-map", "0:v:0"]
+            args += ["-map", "1:a:0", *fit, "-c:a", "aac", "-b:a", "256k"] if sound_file else ["-an"]
+            run([*args, *_H264, "-movflags", "+faststart", str(out)])
+            return Assembled(out, described)
         master, final = pp.out_dir / "master.mov", pp.out_dir / "final.mp4"
         args = ["-i", str(joined)] + (["-i", str(sound_file)] if sound_file else []) + ["-map", "0:v:0"]
         args += ["-map", "1:a:0", *fit, "-c:a", "pcm_s24le"] if sound_file else ["-an"]

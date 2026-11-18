@@ -55,8 +55,11 @@ def test_full_flow_through_the_cli(tmp_path, clip3):
     run_cli([["jobs", "done", root, "--job", "j0001", "--provider-id", "prov-1", "--credits", "38", "--file", raw],
              ["conform", root, "--unit", "u01", "--take", "t001"], ["qc", root, "--unit", "u01", "--take", "t001"],
              ["takes", "select", root, "--unit", "u01", "--take", "t001"],
+             ["assemble", root, "--preview"], ["takes", "review", root, "--unit", "u01", "--take", "t001"]])
+    assert main(["assemble", str(root)]) == 2                          # the user has not confirmed the shot yet
+    run_cli([["takes", "confirm", root, "--unit", "u01", "--take", "t001", "--by", "owner"],
              ["assemble", root], ["compare", root], ["report", root], ["audit", root]])
-    assert probe(root / "out" / "final.mp4").frames == 90
+    assert probe(root / "out" / "final.mp4").frames == 90 and probe(root / "out" / "preview.mp4").frames == 90
     assert (root / "out" / "compare.mp4").is_file() and (root / "out" / "report.md").is_file()
 
 

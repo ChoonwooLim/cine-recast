@@ -501,12 +501,14 @@ def fake_take(root: Path, unit_id: str, tmp_path: Path, **options) -> str:
 
 @pytest.fixture(scope="session")
 def _finished3_template(tmp_path_factory, _conformed3_template) -> Path:
-    """conformed3 + an approved, issued and finished job, a scored take, and that take selected."""
+    """conformed3 + an approved, issued and finished job, a scored take, that take selected and
+    confirmed by the user."""
     import shutil
 
     from cine_recast import ledger
     from cine_recast.plan import issue_next, set_cost
     from cine_recast.qc import score_take
+    from cine_recast.review import confirm
     from cine_recast.takes import select
 
     root = tmp_path_factory.mktemp("finished3") / "p"
@@ -517,13 +519,44 @@ def _finished3_template(tmp_path_factory, _conformed3_template) -> Path:
     ledger.done(root, "j0001", "prov-1", 38.0)
     score_take(root, "u01", "t001")
     select(root, "u01", "t001")
+    confirm(root, "u01", "t001", "owner")
     return root
 
 
 @pytest.fixture
 def finished3(_finished3_template, tmp_path):
-    """An isolated copy of the finished project: unit u01, take t001 conformed, scored and selected."""
+    """An isolated copy of the finished project: unit u01, take t001 conformed, scored, selected and
+    confirmed."""
     return _copy_project(_finished3_template, tmp_path)
+
+
+@pytest.fixture(scope="session")
+def _three_units_template(tmp_path_factory, _cast3_template) -> Path:
+    """cast3 planned with --per-shot (units u01, u02, u03 for shots 1, 2, 3), one fake take per unit,
+    conformed by its shot boundary and selected; nothing confirmed. Built once per session."""
+    import shutil
+
+    from cine_recast.conform import conform
+    from cine_recast.plan import build
+    from cine_recast.takes import select
+
+    base = tmp_path_factory.mktemp("three_units")
+    root = base / "p"
+    shutil.copytree(_cast3_template, root)
+    write_models(root)
+    plan = build(root, model="seedance_2_5", method="edit", batch="b", per_shot=True)
+    for unit in plan["units"]:
+        set_prompt(root, unit["id"], GOOD_PROMPT)
+        take = fake_take(root, unit["id"], base)
+        conform(root, unit["id"], take, take_cuts=[0, unit["end"] - unit["start"]])
+        select(root, unit["id"], take)
+    return root
+
+
+@pytest.fixture
+def three_units(_three_units_template, tmp_path):
+    """An isolated copy of the per-shot project: u01-u03, each with take t001 conformed and selected."""
+    return _copy_project(_three_units_template, tmp_path)
 
 
 def fake_soundtrack(pp, *, samples: int = 180000, items: int = 3) -> None:

@@ -117,3 +117,71 @@ def test_a_supplied_audio_file_wins_over_the_soundtrack_and_is_padded(finished3,
     assert final["codec_name"] == "aac" and abs(float(final["duration"]) - 3.75) < 0.05
     [master] = _audio(finished3.out_dir / "master.mov")
     assert master["codec_name"] == "pcm_s24le" and abs(float(master["duration"]) - 3.75) < 0.001
+
+
+# --- task 20 (J): the user confirms every shot before assembly; --preview --------------------
+
+def _unconfirm(pp, *units):
+    data = read_json(pp.plan_file)
+    for unit in data["units"]:
+        if unit["id"] in units:
+            unit.pop("confirmed", None)
+    write_json(pp.plan_file, data)
+
+
+def test_assemble_needs_every_unit_confirmed(three_units):
+    from cine_recast.review import confirm
+
+    root = three_units.root
+    confirm(root, "u02", "t001", "owner")
+    with pytest.raises(CineRecastError) as refused:
+        assemble(root)
+    message = refused.value.message
+    assert "u01, u03" in message and "u02" not in message
+    assert "takes review" in message and "takes confirm" in message
+    assert not three_units.out_dir.exists() or not any(three_units.out_dir.iterdir())
+    for unit in ("u01", "u03"):
+        confirm(root, unit, "t001", "owner")
+    assert probe(assemble(root).path).frames == 90
+
+
+def test_a_confirmation_of_another_take_does_not_count(finished3):
+    data = read_json(finished3.plan_file)
+    data["units"][0]["confirmed"]["take"] = "t002"
+    write_json(finished3.plan_file, data)
+    with pytest.raises(CineRecastError, match="u01"):
+        assemble(finished3.root)
+
+
+def test_preview_needs_no_confirmation_and_writes_only_the_preview(finished3, capsys):
+    _unconfirm(finished3, "u01")
+    capsys.readouterr()
+    assert main(["assemble", str(finished3.root), "--preview"]) == 0
+    assert capsys.readouterr().out.splitlines() == [str(finished3.out_dir / "preview.mp4"), "sound: none"]
+    assert sorted(p.name for p in finished3.out_dir.iterdir()) == ["preview.mp4"]
+    info = probe(finished3.out_dir / "preview.mp4")
+    assert info.frames == 90 and info.has_audio is False
+
+
+def test_preview_takes_a_matching_soundtrack_only(finished3, tmp_path):
+    _unconfirm(finished3, "u01")
+    fake_soundtrack(finished3, items=2)
+    result = assemble(finished3.root, preview=True)
+    assert result.sound == "soundtrack (2 items)" and len(_audio(result.path)) == 1
+    finished3.soundtrack_file.write_bytes(finished3.soundtrack_file.read_bytes()[:-1] + b"\x07")
+    result = assemble(finished3.root, preview=True)                           # changed: left out, not refused
+    assert result.sound == "none" and _audio(result.path) == []
+    assert assemble(finished3.root, preview=True, silent=True).sound == "none"
+    with pytest.raises(CineRecastError, match="--preview"):
+        assemble(finished3.root, preview=True, audio=tmp_path / "x.wav")
+    assert not (finished3.out_dir / "final.mp4").exists() and not (finished3.out_dir / "master.mov").exists()
+
+
+def test_preview_still_checks_the_frame_count(finished3):
+    _unconfirm(finished3, "u01")
+    clip = finished3.take_dir("u01", "t001") / "shots" / "0002.mov"
+    run(["-i", str(clip), "-vf", "trim=end_frame=20", "-c:v", "prores_ks", str(clip.with_name("short.mov"))])
+    clip.with_name("short.mov").replace(clip)
+    with pytest.raises(CineRecastError, match="frames"):
+        assemble(finished3.root, preview=True)
+    assert not (finished3.out_dir / "preview.mp4").exists()

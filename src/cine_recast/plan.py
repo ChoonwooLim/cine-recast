@@ -207,6 +207,48 @@ def _pad_problem(item: dict, label: str) -> str | None:
     return None
 
 
+_TAKE_ID = re.compile(r"^t\d{3,}$")
+_CONFIRMED_KEYS = ("take", "by", "at", "note")
+
+
+def _confirmed_problem(item: dict, label: str) -> str | None:
+    """A unit's confirmed: absent (no confirmation) or {"take", "by", "at", "note"}, take a take id,
+    by and at non-empty text, note text."""
+    if "confirmed" not in item:
+        return None
+    value = item["confirmed"]
+    shape = (f"{label}: confirmed must be an object with take (a take id such as 't002'), by, at and note "
+             f"(text), not {value!r}.")
+    if not isinstance(value, dict) or sorted(value) != sorted(_CONFIRMED_KEYS):
+        return shape
+    if not isinstance(value["take"], str) or not _TAKE_ID.fullmatch(value["take"]):
+        return shape
+    if not is_text(value["by"]) or not is_text(value["at"]) or not isinstance(value["note"], str):
+        return shape
+    return None
+
+
+def confirmed_take(item: dict) -> str | None:
+    """The unit's selected take when the user confirmed exactly that take (a well-formed
+    confirmation whose take is the selected take), else None."""
+    if _confirmed_problem(item, "") is not None or "confirmed" not in item:
+        return None
+    take = item["confirmed"]["take"]
+    return take if take == item.get("selected_take") else None
+
+
+def clear_confirmation(root: Path, unit_id: str, take_id: str | None = None) -> bool:
+    """Remove the confirmation of a unit of the current plan (only while take_id is its selected
+    take, when given) and save. Returns True when one was removed."""
+    data = load(root)
+    item = next((u for u in data["units"] if isinstance(u, dict) and u.get("id") == unit_id), None)
+    if item is None or "confirmed" not in item or (take_id is not None and item.get("selected_take") != take_id):
+        return False
+    del item["confirmed"]
+    _save(root, data)
+    return True
+
+
 def pad_frames(item: dict) -> int:
     """The copies of its last frame that the unit's reference clip ends with; 0 when the key is absent.
     A value that is not a whole number of at least 0 is refused with CineRecastError."""
@@ -597,8 +639,9 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
     """Problems that keep the plan's jobs from being issued. An empty list means it is ready.
 
     Unit ids are 'u' followed by digits and job ids 'j' followed by digits; a unit's shots are a
-    non-empty list of shot numbers, its qc_skip a list of score names and its pad_frames, when
-    present, a whole number of at least 0. Each unit's stored inputs
+    non-empty list of shot numbers, its qc_skip a list of score names, its pad_frames, when
+    present, a whole number of at least 0, and its confirmed, when present, the shape
+    _confirmed_problem accepts. Each unit's stored inputs
     must be the inputs _unit_inputs derives from the swap table and the method now, and fit the
     model's image_refs and video_ref as models.json gives them now.
 
@@ -626,9 +669,9 @@ def check(root: Path, *, only_jobs: set[int] | None = None) -> list[str]:
         label = f"unit {item.get('id')}" if is_text(item.get("id")) else f"units[{position}]"
         shape = _unit_problems(item, label)
         problems += shape
-        pad = _pad_problem(item, label)
-        if pad:
-            problems.append(pad)
+        for problem in (_pad_problem(item, label), _confirmed_problem(item, label)):
+            if problem:
+                problems.append(problem)
         prompt = item.get("prompt")
         if not isinstance(prompt, str) or not is_english_prompt(prompt):
             problems.append(f"{label}: prompt must be a non-empty English text (no Han, Hangul or Kana characters).")
