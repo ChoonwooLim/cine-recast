@@ -617,9 +617,37 @@ def test_i3_a_padded_take_is_not_extended_forward(taken):
     assert job_states(root) == {}
 
 
-def test_i3_a_take_of_a_unit_that_was_not_padded_is_extended_forward(taken):
+def test_i3_a_take_whose_shot_reaches_the_end_of_its_raw_file_is_extended_forward(taken, tmp_path):
+    from conftest import fake_take
+
+    from cine_recast.conform import conform
+
+    root = taken.root
+    take = fake_take(root, "u01", tmp_path, extra_frames=-6)              # 90 frames: exactly the unit
+    conform(root, "u01", take)
+    assert read_json(taken.take_dir("u01", take) / "conform.json")["source_frames"] == 90
+    assert _add(root, extend=f"u01/{take}", direction="forward")["params"]["direction"] == "forward"
     data = read_json(taken.plan_file); data["units"][0]["pad_frames"] = 0; write_json(taken.plan_file, data)
-    assert _add(taken.root, extend="u01/t001", direction="forward")["params"]["direction"] == "forward"
+    unconformed = fake_take(root, "u01", tmp_path)                        # never conformed, unit not padded
+    assert _add(root, extend=f"u01/{unconformed}", direction="forward")["id"] == "x0002"
+
+
+# --- final review 2, round 2 (R5): the take's own conform record decides a forward extension ---
+
+def test_r5_a_forward_extension_is_refused_after_plan_unit_removed_the_padding(taken):
+    """Probe PAD: the take was made from a padded clip; plan unit moves the unit to a model whose
+    minimum is below the shot, which sets pad_frames to 0."""
+    from cine_recast import plan
+
+    root = taken.root
+    write_json(taken.models_file, {"models": [EXAMPLE_MODEL, IMAGE_MODEL,
+                                              {**EXAMPLE_MODEL, "id": "short_min", "min_seconds": 3}]})
+    plan.refresh_unit(root, "u01", model="short_min")
+    assert read_json(taken.plan_file)["units"][0]["pad_frames"] == 0
+    with pytest.raises(CineRecastError, match="conform kept its frames 0 to 89 of 108") as refused:
+        _add(root, extend="u01/t001", direction="forward")
+    assert "extra add --start u01/t001:shot-last" in refused.value.message
+    assert not (root / "extras.json").exists()
 
 
 def test_i2_an_extra_without_the_record_of_its_start_image_is_added_again(taken):
@@ -628,3 +656,106 @@ def test_i2_an_extra_without_the_record_of_its_start_image_is_added_again(taken)
     data = read_json(taken.extras_file); del data["extras"][0]["inputs"][0]["sha256"]; write_json(taken.extras_file, data)
     with pytest.raises(CineRecastError, match="does not record what extra add wrote.*add the extra again"):
         extras.set_cost(root, "x0001", 10.0)
+
+
+# --- final review 2, round 2 (R1): a picture that two swap entries name, through extra add ---
+
+@pytest.mark.parametrize("order", [("horse", "hero"), ("hero", "horse")])
+def test_r1_extra_add_refuses_a_picture_named_for_a_creature_and_a_person_in_either_order(taken, order):
+    from cine_recast.inputs import image_problems
+
+    root = taken.root
+    c = read_json(taken.casting_file)
+    c["elements"].append({"id": "horse", "kind": "creature", "name": "Horse", "shots": [1], "look": "brown horse"})
+    c["swaps"] = [s for s in c["swaps"] if s["element"] != "hero"]
+    write_json(taken.casting_file, c)
+    for element in order:
+        swap_image(root, "both.jpg", element)
+    set_right(root, "likeness_consent", "no")
+    with pytest.raises(CineRecastError, match="likeness_consent"):
+        _add(root, refs=["swap/both.jpg"])
+    assert any("may carry a real person's likeness" in p
+               for p in image_problems(root, ["swap/both.jpg"], label="extra"))   # the rule extra add runs
+    assert not (root / "extras.json").exists()
+
+
+# --- final review 2, round 2 (R2): copies at another size or compression, flat frames, scaled bars ---
+
+def _copy_of_still(taken, name, change):
+    """The first still of shot 1, changed by `change` (a PIL image -> PIL image), saved as swap/<name>
+    and named in the swap table."""
+    with Image.open(taken.shot_dir(1) / "stills" / "first.png") as still:
+        picture = change(still.convert("RGB"))
+    target = taken.root / "swap" / name
+    target.parent.mkdir(exist_ok=True)
+    picture.save(target, **({"quality": 50} if name.endswith(".jpg") else {}))
+    data = read_json(taken.casting_file); data["swaps"][1]["images"].append(f"swap/{name}")
+    write_json(taken.casting_file, data)
+    return f"swap/{name}"
+
+
+@pytest.mark.parametrize("name, change", [
+    ("half.png", lambda im: im.resize((im.width // 2, im.height // 2), Image.BICUBIC)),
+    ("half_nearest.png", lambda im: im.resize((im.width // 2, im.height // 2), Image.NEAREST)),
+    ("three_quarter.png", lambda im: im.resize((im.width * 3 // 4, im.height * 3 // 4), Image.BICUBIC)),
+    ("three_quarter_nearest.png", lambda im: im.resize((im.width * 3 // 4, im.height * 3 // 4), Image.NEAREST)),
+    ("q50.jpg", lambda im: im),
+])
+def test_r2_a_resized_or_recompressed_frame_of_the_reference_is_refused(taken, name, change):
+    image = _copy_of_still(taken, name, change)
+    with pytest.raises(CineRecastError, match="another size or compression") as refused:
+        _add(taken.root, start=image)
+    assert "frame of the reference video is never a start or end image" in refused.value.message
+    assert not (taken.root / "extras").exists()
+
+
+def test_r2_an_unrelated_picture_and_a_generated_key_picture_are_accepted(taken, tmp_path):
+    from PIL import ImageDraw
+
+    root = taken.root
+    noise = root / swap_image(root, "noise.png", "sky_battle")
+    Image.fromarray(np.random.default_rng(3).integers(0, 256, (216, 384, 3), dtype=np.uint8)).save(noise)
+    key = root / generate_and_use(root, "hero", tmp_path)
+    picture = Image.new("RGB", (384, 216), (40, 90, 160))
+    draw = ImageDraw.Draw(picture)
+    draw.ellipse((100, 40, 280, 190), fill=(220, 180, 60)); draw.rectangle((0, 170, 384, 216), fill=(30, 120, 40))
+    picture.save(key)
+    assert _add(root, start="swap/noise.png", end=key)["id"] == "x0001"
+
+
+@pytest.fixture
+def dark(tmp_path):
+    """A letterboxed reference (bars of 24 px) that opens on 12 black frames, then 36 frames of
+    testsrc2, analysed, with a background swap so pictures can be named, every right "yes"."""
+    from cine_recast.analyze import analyze
+    from cine_recast.project import RIGHTS_ITEMS, init_project
+
+    clip = make_clip(tmp_path / "dark.mp4", [("color=c=black", 12), ("testsrc2", 36)], bars=24)
+    pp = init_project(tmp_path / "d", clip, "dark")
+    analyze(pp.root, picture=(0, 24, 384, 168), cuts=[12])
+    write_json(pp.casting_file, {"elements": [{"id": "sky", "kind": "background", "name": "Sky", "shots": [1, 2],
+                                               "look": "a coloured test pattern"}], "swaps": []})
+    for item in RIGHTS_ITEMS:
+        set_right(pp.root, item, "yes")
+    write_json(pp.models_file, {"models": [EXAMPLE_MODEL]})
+    return pp
+
+
+def test_r2_a_near_black_picture_is_not_a_copy_of_a_black_frame(dark, monkeypatch):
+    root = dark.root
+    picture = root / swap_image(root, "night.png", "sky")
+    Image.new("RGB", (384, 216), (1, 1, 1)).save(picture)                 # 1.0 from black: inside 1.5
+    assert _add(root, start="swap/night.png")["id"] == "x0001"            # flat reference frames keep 0.25
+    monkeypatch.setattr(extras, "FLAT_SPREAD", 0.0)                       # without that rule it would be refused
+    with pytest.raises(CineRecastError, match="frame 0 of the reference video"):
+        _add(root, start="swap/night.png")
+
+
+def test_r2_a_scaled_full_frame_with_its_bars_is_refused(dark):
+    root = dark.root
+    full = root / swap_image(root, "full.png", "sky")
+    extract_still(root / "reference" / "source.mp4", 30, full)            # the whole frame, bars included
+    with Image.open(full) as frame:
+        frame.convert("RGB").resize((192, 108), Image.BICUBIC).save(full)
+    with pytest.raises(CineRecastError, match="another size or compression"):
+        _add(root, start="swap/full.png")

@@ -556,18 +556,18 @@ $p = "$env:USERPROFILE\Videos\cine-recast\my-project"
 
 - `--label`: 짧은 이름. 한국어도 되고 한자는 안 된다. `--prompt`: 영어(단위 프롬프트와 같은 규칙).
 - `--model`: `models.json`의 영상 모델. `--seconds`: 모델의 `min_seconds`에서 `max_seconds` 사이의 정수.
-- `--extend U/T`와 `--direction backward|forward`: 테이크 `takes/U/T/raw.*`를 늘린다. `backward`는 테이크의 첫 프레임 앞을, `forward`는 끝 프레임 뒤를 만든다. 테이크의 원본 파일 전체가 역할 `video` 입력이 되고, 모델의 `video_ref`가 `true`여야 한다. `--direction`은 `--extend`와만 쓰고, `--extend`는 `--start`, `--end`와 함께 쓰지 않는다. 패딩한 단위(`pad_frames`가 0보다 크다)의 테이크는 `forward`로 늘리지 않는다. 원본 파일의 끝은 영화에 들어가지 않는 멈춘 화면이어서 모델이 거기서 이어 가기 때문이다. 그때 도구는 거부하며 `--start U/T:shot-last`를 알려 준다. `backward`는 그대로 받는다.
+- `--extend U/T`와 `--direction backward|forward`: 테이크 `takes/U/T/raw.*`를 늘린다. `backward`는 테이크의 첫 프레임 앞을, `forward`는 끝 프레임 뒤를 만든다. 테이크의 원본 파일 전체가 역할 `video` 입력이 되고, 모델의 `video_ref`가 `true`여야 한다. `--direction`은 `--extend`와만 쓰고, `--extend`는 `--start`, `--end`와 함께 쓰지 않는다. 숏이 원본 파일의 끝까지 가지 않는 테이크는 `forward`로 늘리지 않는다. 원본 파일의 끝이 영화에 들어가지 않는 멈춘 화면이나 남는 프레임이어서 모델이 거기서 이어 가기 때문이다. 맞춘 테이크는 그 테이크의 `conform.json`으로 정한다. 남긴 프레임의 끝(`--take-cuts`의 마지막 값, 아니면 `--start-frame`에 단위의 프레임 수를 더한 값. `--allow-retime`이면 테이크의 끝)이 `source_frames`보다 작으면 거부한다. 단위가 지금 패딩했는지와 상관없으므로 `plan unit`으로 패딩이 없어진 뒤에도 그렇다. 맞추지 않은 테이크는 패딩한 단위(`pad_frames`가 0보다 크다)의 것이면 거부한다. 거부할 때 도구는 `--start U/T:shot-last`를 알려 준다. `backward`는 그대로 받는다.
 - `--start`, `--end`: 새 클립의 첫 프레임과 끝 프레임. 테이크의 프레임(`U/T:FRAME`)이나 이미지를 준다. 도구가 테이크의 프레임은 테이크의 크기 그대로, 이미지는 PNG로 바꿔 `extras/<id>/start.png`, `end.png`에 쓰고, 역할 `start_image`, `end_image` 입력으로 삼는다. 견적은 이 파일의 내용에 묶인다.
   - `U/T:shot-first`, `U/T:shot-last`: `conform`이 그 테이크에서 숏으로 남긴 첫 프레임과 마지막 프레임(`conform.json`: `--take-cuts`를 썼으면 첫 값과 마지막 값에서 1을 뺀 값, 아니면 `--start-frame`부터 단위의 프레임 수만큼, `--allow-retime`이면 `--start-frame`부터 테이크 끝까지). 숏 여럿인 단위면 첫 숏의 첫 프레임과 마지막 숏의 마지막 프레임이다. 이 번호는 프레임 속도를 바꾼 뒤의 번호이므로, 테이크의 프레임 속도가 원본과 다르면 도구가 그 프레임을 보여 주는 원본 파일의 프레임으로 바꾼다(30fps 테이크를 24fps 원본에 맞췄으면 맞춘 프레임 29는 원본 파일의 프레임 36이다). 확정한 숏에 이어 붙일 때는 이것을 쓴다. `conform`하지 않은 테이크면 거부된다(`has not been conformed`).
   - `U/T:first`, `U/T:last`, `U/T:<n>`: 테이크 원본 파일(`raw`)의 첫 프레임, 마지막 프레임, 0부터 센 n번째 프레임. 프레임 속도를 바꾸기 전의 번호다. 패딩한 단위의 테이크에서 `last`는 숏 뒤의 멈춘 화면이고, 앞을 잘라 맞춘 테이크에서 `first`는 숏 앞의 여분이다.
-  - 이미지: `--ref`와 같은 이미지(아래). 원본의 프레임은 첫 프레임이나 끝 프레임이 될 수 없다. 모델은 그 그림을 거의 그대로 새 클립에 옮기기 때문이다. 도구는 그림을 원본의 모든 프레임과 64x36 회색 축소 화면으로 견주어 차이가 0.25 미만인 프레임이 있으면 거부한다(PNG나 JPEG로 옮긴 사본, 검은 띠가 든 원래 크기의 프레임도 걸린다. 크기를 바꾼 사본은 걸리지 않을 수 있다). 원본을 읽을 수 없으면 확인할 수 없으므로 거부한다. 원본과 같은 장면에서 시작해야 하면 그 그림을 자료로 생성해(`assets add`) 저장된 파일을 준다.
+  - 이미지: `--ref`와 같은 이미지(아래). 원본의 프레임은 첫 프레임이나 끝 프레임이 될 수 없다. 모델은 그 그림을 거의 그대로 새 클립에 옮기기 때문이다. 도구는 그림을 원본의 모든 프레임과 64x36 회색 축소 화면으로 견주어 평균 차이가 1.5 미만인 프레임이 있으면 거부한다. 그래서 PNG나 JPEG로 옮긴 사본(품질 40 정도까지), 크기를 절반에서 1.5배까지 바꾼 사본, 검은 띠가 든 원래 프레임(크기를 바꿨어도 화면 비율이 같으면 띠를 같은 비율로 잘라 견준다)이 걸린다. 서로 다른 그림은 보통 수십만큼 다르다. 검은 화면이나 페이드의 한 색처럼 고른 원본 프레임에는 0.25를 그대로 써서, 어두운 시작 그림이 검은 프레임과 비슷하다는 이유로 거부되지 않게 한다. 잘라 내거나 좌우를 뒤집거나 밝기와 색을 바꾼 프레임은 이 비교로 알아보지 못한다. 원본을 읽을 수 없으면 확인할 수 없으므로 거부한다. 원본과 같은 장면에서 시작해야 하면 그 그림을 자료로 생성해(`assets add`) 저장된 파일을 준다.
 - `--ref`: 참조 이미지(여러 번 쓸 수 있다, 역할 `image`). 프로젝트의 `assets/` 안의 생성 파일(장부에 끝난 것으로 기록된 자료가 저장한 파일)이나, 지금 `casting.json`의 `swaps[].images`에 적힌 `swap/` 안의 이미지만 받는다. 열리지 않는 그림은 거부된다.
 - 권리: `--ref`의 이미지와 `--start`, `--end`로 준 이미지에는 `assets add`의 참조 이미지와 같은 규칙이 따른다. 인물의 초상을 담은 그림(인물의 사진, 사진을 참조로 만든 인물의 파일, 그런 파일로 만든 짝 시트)은 `likeness_consent`가 `yes`여야 하고, `--ref` 없이 만든 가상 인물의 그림은 `not_applicable`로도 된다. 배경 요소의 교체 이미지는 `background_rights`에 답이 있어야 한다. `cast check`는 교체표만 보므로 이 검사를 대신하지 않는다.
 - 입력은 하나도 없어도 된다(프롬프트만으로 만드는 숏). 테이크는 현재 계획이나 보관된 계획의 단위에 있어야 하고, 이미지 입력 수(`start`, `end`, `--ref`)는 모델의 `image_refs` 이하여야 한다.
 - `--quality`: `draft`(기본)는 모델의 첫 해상도, `final`은 마지막 해상도. `--aspect-ratio`: 생략하면 화면 영역에 가장 가까운 비율.
 - 쓰는 것: `extras.json`, `--start`나 `--end`를 주면 `extras/<id>/start.png`, `end.png`. 출력: id(`x0001`). 한 번 쓴 id는 다시 쓰이지 않는다.
 - 소리: 결과 클립에 든 소리는 검사하지 않고 어디에도 쓰지 않는다.
-- 거부: 테이크나 단위가 없다. 프레임 번호가 파일 밖이다. `shot-first`나 `shot-last`인데 테이크를 맞추지 않았다. `--extend`와 `--start`나 `--end`를 함께 줬다. `--extend`에 `--direction`이 없거나 `--extend` 없이 `--direction`을 줬다. 패딩한 단위의 테이크를 `forward`로 늘린다. 이미지가 `assets/`나 `swap/` 밖에 있거나, 생성 파일도 교체표의 이미지도 아니거나, 열리지 않거나, 원본의 프레임이다. 이미지 입력이 `image_refs`보다 많다. `--extend`인데 모델의 `video_ref`가 `false`다. 길이가 모델 범위 밖이다. 프롬프트가 영어가 아니다. 이름이나 이미지 파일 이름에 한자가 있다. `cast check`를 통과하지 못한다(테이크에는 교체한 인물이 나오므로 같은 권리 답이 필요하다). 이미지가 위의 권리 답을 갖추지 못했다. 거부되면 아무것도 쓰지 않는다.
+- 거부: 테이크나 단위가 없다. 프레임 번호가 파일 밖이다. `shot-first`나 `shot-last`인데 테이크를 맞추지 않았다. `--extend`와 `--start`나 `--end`를 함께 줬다. `--extend`에 `--direction`이 없거나 `--extend` 없이 `--direction`을 줬다. 숏이 원본 파일의 끝까지 가지 않는 테이크를 `forward`로 늘린다. 이미지가 `assets/`나 `swap/` 밖에 있거나, 생성 파일도 교체표의 이미지도 아니거나, 열리지 않거나, 원본의 프레임이나 그 사본이다. 이미지 입력이 `image_refs`보다 많다. `--extend`인데 모델의 `video_ref`가 `false`다. 길이가 모델 범위 밖이다. 프롬프트가 영어가 아니다. 이름이나 이미지 파일 이름에 한자가 있다. `cast check`를 통과하지 못한다(테이크에는 교체한 인물이 나오므로 같은 권리 답이 필요하다). 이미지가 위의 권리 답을 갖추지 못했다. 거부되면 아무것도 쓰지 않는다.
 
 ### extra list
 
@@ -967,7 +967,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$p\reference\source.mp4" -vf "select=
 ffmpeg -hide_banner -loglevel error -y -i "$p\reference\source.mp4" -vf "select='between(n\,24\,35)',scale=320:-2,tile=6x2" -frames:v 1 -update 1 "$p\review\ref_0024-0035.png"
 ```
 
-**테이크 한 프레임을 참조 이미지로.** 사용자가 마음에 들어 한 모습(얼굴, 크리처의 생김새)을 다음 테이크의 참조로 쓸 때다. `40`은 테이크 원본 파일의 프레임 번호(0부터)이고, 크기는 줄이지 않는다. 뽑은 그림은 그 요소의 `casting.json` `swaps[].images`에 더하고 `cast check`를 통과시킨 뒤, 그 요소가 나오는 단위마다 `plan unit`을 실행한다. 원본의 프레임은 이렇게 쓰지 않는다.
+**테이크 한 프레임을 참조 이미지로.** 사용자가 마음에 들어 한 모습(크리처의 생김새, 소품, 배경)을 다음 테이크의 참조로 쓸 때다. 인물 요소에 쓰려면 `likeness_consent`가 `yes`여야 한다(`cast check`가 요구한다). 가상 인물(`not_applicable`)에는 쓰지 않고, 그 모습을 글로 적어 참조 이미지 없이 `assets add`로 새 시트를 만든다. `40`은 테이크 원본 파일의 프레임 번호(0부터)이고, 크기는 줄이지 않는다. 뽑은 그림은 그 요소의 `casting.json` `swaps[].images`에 더하고 `cast check`를 통과시킨 뒤, 그 요소가 나오는 단위마다 `plan unit`을 실행한다. 원본의 프레임은 이렇게 쓰지 않는다.
 
 ```powershell
 ffmpeg -hide_banner -loglevel error -y -i "$p\takes\u02\t003\raw.mp4" -vf "select='eq(n\,40)'" -frames:v 1 -update 1 "$p\swap\dragon_u02_t003_0040.png"

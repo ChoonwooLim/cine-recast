@@ -492,3 +492,39 @@ def test_m3_a_pair_sheet_made_from_a_real_person_is_not_verified(assets3, tmp_pa
     with pytest.raises(CineRecastError, match="likeness_consent must be 'yes'"):
         add(root, element="sky_battle", prompt="The sky again.", model="image_model_x", batch="b",
             refs=[Path(read_json(assets3.casting_file)["swaps"][1]["images"][0])])
+
+
+# --- final review 2, round 2 (R1): a picture that two swap entries name ---
+
+HORSE = {"id": "horse", "kind": "creature", "name": "Horse", "shots": [1], "look": "brown horse with a white blaze"}
+
+
+def _named_twice(pp, order):
+    """swap/both.jpg (a rider on a horse) named in the swaps of both elements, in this order."""
+    c = read_json(pp.casting_file); c["elements"].append(HORSE); write_json(pp.casting_file, c)
+    for element in order:
+        swap_image(pp.root, "both.jpg", element)
+    assert [s["element"] for s in read_json(pp.casting_file)["swaps"]] == list(order)
+    return "swap/both.jpg"
+
+
+@pytest.mark.parametrize("order", [("horse", "hero"), ("hero", "horse")])
+def test_r1_a_picture_named_for_a_creature_and_a_person_needs_consent_in_either_order(assets3, order):
+    root = assets3.root
+    both = _named_twice(assets3, order)
+    set_right(root, "likeness_consent", "no")
+    with pytest.raises(CineRecastError, match="likeness_consent must be 'yes'"):
+        add(root, element="horse", prompt="The horse of the reference image, side view, plain backdrop.",
+            model="image_model_x", batch="b", refs=[Path(both)])
+    assert not assets3.assets_file.exists()
+
+
+@pytest.mark.parametrize("order", [("horse", "sky_battle"), ("sky_battle", "horse")])
+def test_r1_a_picture_named_for_a_creature_and_a_background_needs_background_rights_in_either_order(assets3, order):
+    root = assets3.root
+    both = _named_twice(assets3, order)
+    project = read_json(assets3.project_file); project["rights"]["background_rights"] = None
+    write_json(assets3.project_file, project)
+    with pytest.raises(CineRecastError, match="background_rights is not answered"):
+        add(root, element="horse", prompt="The horse of the reference image, side view, plain backdrop.",
+            model="image_model_x", batch="b", refs=[Path(both)])

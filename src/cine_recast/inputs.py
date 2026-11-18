@@ -53,12 +53,12 @@ class _Project:
         elements = data.get("elements") if isinstance(data, dict) and isinstance(data.get("elements"), list) else []
         self.kinds = {e["id"]: e.get("kind") for e in elements if isinstance(e, dict) and isinstance(e.get("id"), str)}
         swaps = data.get("swaps") if isinstance(data, dict) and isinstance(data.get("swaps"), list) else []
-        self.swap_images: dict[str, str] = {}               # image key -> element of the swap that names it
+        self.swap_images: dict[str, set[str]] = {}          # image key -> every element whose swap names it
         for swap in swaps:
             if isinstance(swap, dict) and isinstance(swap.get("element"), str) and isinstance(swap.get("images"), list):
                 for image in swap["images"]:
                     if isinstance(image, str):
-                        self.swap_images.setdefault(_key(self.root, image), swap["element"])
+                        self.swap_images.setdefault(_key(self.root, image), set()).add(swap["element"])
         self.rights = load_project(self.root).get("rights") or {}
         self._stored: dict[str, dict] | None = None
 
@@ -71,6 +71,11 @@ class _Project:
             self._stored = {_key(self.root, name): asset for name, asset in stored_assets(self.root).items()}
         return self._stored
 
+    def naming(self, image, kind: str) -> list[str]:
+        """The elements of this kind whose swap names the image, sorted (a picture two swap entries
+        name, a rider on a horse, counts as a person's when either of them is a person)."""
+        return sorted(e for e in self.swap_images.get(_key(self.root, image), ()) if self.kinds.get(e) == kind)
+
     def under_assets(self, image) -> bool:
         return inside_folder(self.root / str(image), [self.pp.assets_dir]) is not None
 
@@ -82,11 +87,11 @@ class _Project:
             if asset is None:
                 return {UNKNOWN: f"{image} is not a file a done asset stored"}
             return self._trace_asset(asset, key, seen)
-        element = self.swap_images.get(key)
-        if element is None:
+        if key not in self.swap_images:
             return {UNKNOWN: f"{image} is neither a generated file nor an image the swap table names"}
-        if self.kinds.get(element) == "person":
-            return {REAL: f"{image} is an image of the person element {element!r} in the swap table"}
+        persons = self.naming(image, "person")
+        if persons:
+            return {REAL: f"{image} is an image of the person element {persons[0]!r} in the swap table"}
         return {}
 
     def _trace_asset(self, asset: dict, key: str, seen: frozenset) -> dict[str, str]:
@@ -167,10 +172,9 @@ def image_problems(root: Path, images, *, label: str) -> list[str]:
                 f"{label}: {image} shows a person ({carried[VIRTUAL]}); a person needs likeness_consent 'yes', or "
                 f"'not_applicable' for a virtual person (it is {consent!r}). Ask the user and record the answer with "
                 "rights set --item likeness_consent")
-        element = project.swap_images.get(_key(root, image))
-        if (element is not None and project.kinds.get(element) == "background"
-                and casting.answer(project.rights, "background_rights") is None):
-            problems.append(f"{label}: {image} is the swap image of the background element {element!r} and "
+        backgrounds = project.naming(image, "background")
+        if backgrounds and casting.answer(project.rights, "background_rights") is None:
+            problems.append(f"{label}: {image} is the swap image of the background element {backgrounds[0]!r} and "
                             "background_rights is not answered; ask the user and record it with: rights set --item "
                             "background_rights")
     return problems

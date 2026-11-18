@@ -25,11 +25,13 @@ planned (add) -> quoted (set_cost) -> issued (issue_next) -> done or failed (rec
   video is the raw file of a take of a planned unit, a start or end image is the file extra add
   wrote (with the content it wrote), and every reference image and every picture a start or end
   image was copied from passes the rule all input images share (inputs.image_problems).
-- A padded unit's take is never extended forward: the end of its raw file is held picture that is
-  not part of the film. A start or end frame named U/T:shot-first or U/T:shot-last is the first or
-  last frame conform kept, so a new clip joins the shot the user confirmed.
-- A frame of the reference video is never a start or end image (add compares the picture with
-  every frame of the reference).
+- A take whose shot does not reach the end of its raw file is never extended forward: what follows
+  is held picture or spare frames, not part of the film. A conformed take is judged by its own
+  conform.json, an unconformed one by its unit's pad_frames. A start or end frame named
+  U/T:shot-first or U/T:shot-last is the first or last frame conform kept, so a new clip joins the
+  shot the user confirmed.
+- A frame of the reference video, or a copy of one at another size or compression, is never a
+  start or end image (add compares the picture with every frame of the reference).
 - Extras are free cuts for the user: assemble, which rebuilds the reference shot for shot, never
   uses them, and their sound is neither checked nor used.
 """
@@ -68,6 +70,19 @@ _TAKE = re.compile(r"^(u\d+)/(t\d{3,})$")
 _FRAME = re.compile(r"^(u\d+)/(t\d{3,}):(first|last|shot-first|shot-last|\d+)$")
 _RAW = re.compile(r"^takes/(u\d+)/(t\d{3,})/raw\.[A-Za-z0-9]+$")
 _NOUN, _QUOTE_COMMAND = "extra", "extra set-cost"
+# A start or end image is a frame of the reference when its signature (cuts.picture_signature) is
+# within REFERENCE_COPY_LIMIT grey levels of a reference frame's. HOLD_DIFF (0.25) is the limit for
+# held copies inside one decoded video and lets resized or recompressed copies through. Measured in
+# the scoped re-review of final review 2 on 1280x536 frames: exact PNG copies 0.00, JPEG q95 to q40
+# 0.04 to 0.60, copies at 1.5 times, three quarter and half size (also a 640-wide thumbnail and half
+# size plus JPEG q80) 0.36 to 0.88, with nearest-neighbour resampling up to 1.36; the next frame of
+# a slow shot 0.00 to 0.91; unrelated pictures 44 and up (the cut limit is 5.0). Not caught: a
+# frame cropped or mirrored (11 to 37), and not reliably a regraded one (brightness +3 percent,
+# contrast +5 percent: 0.95 to 1.96).
+REFERENCE_COPY_LIMIT = 1.5
+# A reference frame whose signature is flat (black, or one grey of a fade) keeps HOLD_DIFF, so a
+# dark start picture is not refused for resembling a black frame (levels 0 and 1 are 1.0 apart).
+FLAT_SPREAD = 2.0          # standard deviation of a flat signature, in grey levels
 _NOT_A_REFERENCE_FRAME = ("a frame of the reference video is never a start or end image: the model carries it into "
                           "the new clip almost unchanged")
 
@@ -207,14 +222,31 @@ def _padded(root: Path, unit_id: str) -> int:
     return pad if isinstance(pad, int) and not isinstance(pad, bool) and pad > 0 else 0
 
 
-def _forward_problem(root: Path, label: str, unit_id: str, take_id: str) -> str | None:
+def _forward_problem(root: Path, label: str, unit_id: str, take_id: str, raw: Path) -> str | None:
+    """Why the take is not extended forward, or None. A conformed take is judged by its own
+    conform.json: when the frames conform kept end before the end of the raw file (the held tail of
+    a padded unit, or frames the take ran over), the end of the raw file is not the end of the shot.
+    This holds whatever the unit's padding is now (plan unit may have moved it to a model without
+    padding). A take that was never conformed is judged by the unit's pad_frames."""
+    remedy = (f"start the new clip on the last frame of the shot instead: extra add --start "
+              f"{unit_id}/{take_id}:shot-last (backward extension is fine)")
+    if (raw.parent / "conform.json").is_file():
+        try:
+            first, last, total = _kept_frames(root, raw, f"{label}: take {unit_id}/{take_id}")
+        except CineRecastError as exc:
+            return f"{exc.message}; until then it is not extended forward"
+        if last >= total - 1:
+            return None
+        return (f"{label}: take {unit_id}/{take_id} is not extended forward: conform kept its frames {first} to {last} "
+                f"of {total} (counted after the frame-rate conversion), so its raw file goes on past the end of the "
+                f"shot (held picture of a padded unit, or frames the take ran over) and the model would continue from "
+                f"there; {remedy}")
     pad = _padded(root, unit_id)
     if not pad:
         return None
     return (f"{label}: take {unit_id}/{take_id} is not extended forward: unit {unit_id} was padded (its reference "
             f"clip ends with {pad} copies of its last frame), so the end of the take's raw file is held picture that "
-            "is not part of the film, and the model would continue from there; start the new clip on the last frame "
-            f"of the shot instead: extra add --start {unit_id}/{take_id}:shot-last (backward extension is fine)")
+            f"is not part of the film, and the model would continue from there; {remedy}")
 
 
 def _video_problems(root: Path, label: str, item: dict, path: str) -> list[str]:
@@ -238,7 +270,7 @@ def _video_problems(root: Path, label: str, item: dict, path: str) -> list[str]:
                         f"({_source(item).get('extend')!r}); {redo}")
     params = item.get("params") if isinstance(item.get("params"), dict) else {}
     if params.get("direction") == "forward":
-        problem = _forward_problem(root, label, unit_id, take_id)
+        problem = _forward_problem(root, label, unit_id, take_id, raw)
         if problem:
             problems.append(problem)
     return problems
@@ -399,18 +431,13 @@ def raw_frame(fitted: int, raw_rate: Fraction, film_rate: Fraction) -> int:
     return math.ceil((fitted + Fraction(1, 2)) * raw_rate / film_rate) - 1
 
 
-def _shot_frame(root: Path, flag: str, unit_id: str, take_id: str, which: str, raw: Path, facts) -> int:
-    """The raw frame of U/T:shot-first or U/T:shot-last: the first or last frame conform kept for the
-    take (conform.json; for a unit of several shots the first kept frame of its first shot and the
-    last kept frame of its last), converted to a frame of the raw file when the frame rates differ."""
-    name = f"{flag} {unit_id}/{take_id}:{which}"
-    record_file = raw.parent / "conform.json"
-    if not record_file.is_file():
-        raise CineRecastError(f"{name}: take {unit_id}/{take_id} has not been conformed, so the tool does not know "
-                              "where the shot lies in its raw file; run conform for the take first (for a padded unit "
-                              f"with --take-cuts as takes cuts shows), or give a frame of the raw file as "
-                              f"{unit_id}/{take_id}:<n>")
-    record = read_project_json(Path(root), record_file, {"start_frame": int, "source_frames": int, "unit_frames": int})
+def _kept_frames(root: Path, raw: Path, name: str) -> tuple[int, int, int]:
+    """(first, last, source_frames) of the frames conform kept for the take whose raw file this is,
+    counted after the frame-rate conversion, from its conform.json: with take_cuts the first value
+    and the last value minus 1, else from start_frame for unit_frames frames, or to the end of the
+    take when it was retimed. `name` begins the refusal of a record that does not describe the take."""
+    record = read_project_json(Path(root), raw.parent / "conform.json",
+                               {"start_frame": int, "source_frames": int, "unit_frames": int})
     cuts, start, total = record.get("take_cuts"), record["start_frame"], record["source_frames"]
     if cuts is not None:
         whole = isinstance(cuts, list) and len(cuts) >= 2 and all(
@@ -421,8 +448,22 @@ def _shot_frame(root: Path, flag: str, unit_id: str, take_id: str, which: str, r
     else:
         first, last = start, start + record["unit_frames"] - 1
     if not 0 <= first <= last < total:
-        raise CineRecastError(f"{name}: conform.json of take {unit_id}/{take_id} does not describe frames inside the "
-                              "take; run conform for the take again")
+        raise CineRecastError(f"{name}: its conform.json does not describe frames inside the take; run conform for the "
+                              "take again")
+    return first, last, total
+
+
+def _shot_frame(root: Path, flag: str, unit_id: str, take_id: str, which: str, raw: Path, facts) -> int:
+    """The raw frame of U/T:shot-first or U/T:shot-last: the first or last frame conform kept for the
+    take (_kept_frames; for a unit of several shots the first kept frame of its first shot and the
+    last kept frame of its last), converted to a frame of the raw file when the frame rates differ."""
+    name = f"{flag} {unit_id}/{take_id}:{which}"
+    if not (raw.parent / "conform.json").is_file():
+        raise CineRecastError(f"{name}: take {unit_id}/{take_id} has not been conformed, so the tool does not know "
+                              "where the shot lies in its raw file; run conform for the take first (for a padded unit "
+                              f"with --take-cuts as takes cuts shows), or give a frame of the raw file as "
+                              f"{unit_id}/{take_id}:<n>")
+    first, last, _ = _kept_frames(root, raw, f"{name}: take {unit_id}/{take_id}")
     fitted = first if which == "shot-first" else last
     info, _ = load_video(root)
     index = raw_frame(fitted, Fraction(facts.fps_num, facts.fps_den), Fraction(info.fps_num, info.fps_den))
@@ -438,23 +479,38 @@ def _rgb(path: Path, what: str) -> np.ndarray:
         return np.asarray(image.convert("RGB"))
 
 
-def _reference_frame_match(root: Path, rgb: np.ndarray) -> tuple[int, float] | None:
-    """(frame, difference) of the reference frame whose signature is within HOLD_DIFF of the
-    picture's, or None. The picture is compared as it is and, when it has the reference's full frame
-    size, as its picture area. Refused (fail closed) when the reference cannot be read whole."""
+def _picture_areas(rgb: np.ndarray, info, box) -> list[np.ndarray]:
+    """The picture as it is and, when it has the full frame's aspect (any size) and the reference has
+    bars, its picture area cut at the same proportions, so a scaled full frame loses its bars too."""
+    areas = [rgb]
+    height, width = rgb.shape[:2]
+    letterboxed = (box.w, box.h) != (info.width, info.height)
+    if letterboxed and abs(width * info.height - height * info.width) <= 0.01 * width * info.height:
+        sx, sy = width / info.width, height / info.height
+        x0, y0 = round(box.x * sx), round(box.y * sy)
+        x1, y1 = round((box.x + box.w) * sx), round((box.y + box.h) * sy)
+        if x1 - x0 >= 2 and y1 - y0 >= 2:
+            areas.append(rgb[y0:y1, x0:x1])
+    return areas
+
+
+def _reference_frame_match(root: Path, rgb: np.ndarray) -> tuple[int, float, float] | None:
+    """(frame, difference, limit) of the first reference frame whose signature is within the limit of
+    the picture's, or None: REFERENCE_COPY_LIMIT, or HOLD_DIFF for a flat reference frame
+    (FLAT_SPREAD). The picture is compared as it is and as its picture area (_picture_areas).
+    Refused (fail closed) when the reference cannot be read whole."""
     info, box = load_video(root)
-    candidates = [picture_signature(rgb)]
-    if rgb.shape[:2] == (info.height, info.width) and (box.w, box.h) != (info.width, info.height):
-        candidates.append(picture_signature(rgb[box.y:box.y + box.h, box.x:box.x + box.w]))
+    candidates = [picture_signature(area) for area in _picture_areas(rgb, info, box)]
     reference = Path(root) / load_project(root)["reference"]
     read = 0
     try:
         for index, frame in enumerate(iter_frames(reference, crop=box.as_crop())):
             read += 1
             signature = picture_signature(frame)
+            limit = HOLD_DIFF if float(signature.std()) < FLAT_SPREAD else REFERENCE_COPY_LIMIT
             difference = min(float(np.abs(candidate - signature).mean()) for candidate in candidates)
-            if difference < HOLD_DIFF:
-                return index, difference
+            if difference < limit:
+                return index, difference, limit
     except ToolNotFound:
         raise
     except CineRecastError as exc:
@@ -482,9 +538,10 @@ def _frame_choice(root: Path, flag: str, text: str) -> tuple[str, Path, int | No
                                   f"project folder, and {_NOT_A_REFERENCE_FRAME}")
         found = _reference_frame_match(root, _rgb(path, f"{flag} {text}"))
         if found is not None:
-            raise CineRecastError(f"{flag} {text}: this picture is frame {found[0]} of the reference video (its 64x36 "
-                                  f"signature differs by {found[1]:.2f}, under the {HOLD_DIFF} that copies of one "
-                                  f"picture stay under); {_NOT_A_REFERENCE_FRAME}. Generate the key picture as an "
+            raise CineRecastError(f"{flag} {text}: this picture is frame {found[0]} of the reference video, or a copy "
+                                  f"of it at another size or compression (its 64x36 signature differs by "
+                                  f"{found[1]:.2f}, under the limit of {found[2]} for a copy); "
+                                  f"{_NOT_A_REFERENCE_FRAME}. Generate the key picture as an "
                                   "asset (assets add, then give the stored file under assets/), or start from a take "
                                   "with U/T:shot-first or U/T:shot-last")
         return "image", path, None
@@ -560,6 +617,7 @@ def add(root: Path, *, label: str, prompt: str, model: str, seconds: int, batch:
     frames = {}
     for flag, name, value in (("--start", "start", start), ("--end", "end", end)):
         if value is not None:
+            value = str(value)                  # a path object from a caller is kept as the text it spells
             problem = han_problem(flag, value)
             if problem:
                 raise CineRecastError(f"{problem}; rename the file without them")
