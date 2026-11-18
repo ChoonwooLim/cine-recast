@@ -321,7 +321,7 @@ def record_done(root: Path, asset_id: str, provider_id: str, credits: float, fil
     listed = asset.get("files")                            # restored if the ledger refuses: only files still there
     previous = [name for name in listed if isinstance(name, str) and (root / name).is_file()] \
         if isinstance(listed, list) else []
-    targets =[folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
+    targets = [folder / f"{asset_id}_{n}{source.suffix.lower()}" for n, source in enumerate(sources, start=1)]
     folder.mkdir(parents=True, exist_ok=True)
     stored: list[Path] = []
 
