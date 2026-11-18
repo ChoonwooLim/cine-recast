@@ -991,10 +991,10 @@ def test_letterboxed_ntsc_reference(tmp_path):
 계산식:
 
 - `timing_ok`: 두 클립의 프레임 수가 같다. 다르면 다른 항목은 `null`, `failed`는 `["timing"]`.
-- `camera`: 참조와 테이크의 `camera_series`를 길이 5의 이동 평균으로 다듬는다. 참조의 세 열 표준편차가 모두 0.05 미만이면, 테이크도 그렇다면 1.0, 아니면 0.0. 그 밖에는 열별 피어슨 상관을 0 아래에서 자르고, 참조 열의 분산 비중으로 가중 평균한다.
-- `motion`: 프레임 쌍마다 두 `motion_maps`의 코사인 유사도를 구해 평균한다. 두 맵의 합이 모두 1e-3 미만인 쌍은 1.0으로 센다.
+- `camera`(구현 중 고침): 프레임 쌍마다 움직임 벡터 `v = (dx, dy, ds * ANALYSIS_WIDTH / 2)`를 만든다. 배율 항을 화면 가장자리의 픽셀 이동으로 바꿔 세 항의 단위를 맞춘 것이다. 참조와 테이크를 길이 5의 이동 평균으로 다듬는다. `D`는 프레임 쌍별 `(a - b)` 길이의 평균, `A`와 `B`는 `a`와 `b` 길이의 평균일 때 `camera = clamp(1 - max(0, D - 0.25) / (A + B + 0.5), 0, 1)`. 0.25픽셀은 추적 잡음 수준의 차이를 무시하는 허용값이고, 0.5픽셀은 거의 멈춘 두 숏을 잡음만으로 판정하지 않게 하는 바닥값이다. 처음 계획한 피어슨 상관은 평균을 빼기 때문에 일정한 속도의 팬을 정지로 보고, 왼쪽 팬과 오른쪽 팬을 구분하지 못했다.
+- `motion`: 프레임 쌍마다 두 `motion_maps`의 코사인 유사도를 구해 평균한다. 두 맵의 평균이 모두 0.01픽셀 미만인 쌍은 1.0으로 센다(같은 프레임에서도 광학 흐름 계산의 잡음이 남기 때문에 합이 아니라 평균으로 판정한다).
 - `color`: 프레임별 평균 Lab의 유클리드 거리 평균을 `d`라 할 때 `clamp(1 - d / 40, 0, 1)`.
-- `flicker_ratio`: `flicker(take) / max(flicker(ref), 0.05)`.
+- `flicker_ratio`: `max(flicker(take), 0.05) / max(flicker(ref), 0.05)`.
 - `overlap_ratio`: 테이크의 화면 영역을 참조 클립 크기로 맞춘 뒤 16×16 블록마다 RGB 평균 절대 차가 6 미만인 블록의 비율, 프레임 평균. 판정에는 쓰지 않는다.
 - 판정: `camera >= camera_min`, `motion >= motion_min`, `color >= color_min`, `flicker_ratio <= flicker_ratio_max`를 모두 만족하면 `"pass"`. `skip`에 있는 이름은 판정에서 뺀다. 단위 판정은 모든 숏이 `pass`일 때 `pass`.
 - 기준값은 `project.json`의 `thresholds`, 건너뛸 항목은 단위의 `qc_skip`에서 읽는다.
@@ -1020,7 +1020,7 @@ def test_opposite_pan_fails_camera(tmp_path):
 def test_static_reference_and_moving_take(tmp_path):
     ref = make_motion_clip(tmp_path / "r.mp4", "static")
     take = make_motion_clip(tmp_path / "t.mp4", "pan")
-    assert score_shot(ref, take, PictureBox(0, 0, 384, 216), T)["camera"] == 0.0
+    assert score_shot(ref, take, PictureBox(0, 0, 384, 216), T)["camera"] < 0.2
 
 def test_recoloured_take(tmp_path):
     ref = make_motion_clip(tmp_path / "r.mp4", "pan")
